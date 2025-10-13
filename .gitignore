@@ -23,3 +23,14 @@ data/
 node_modules/
 # Logs
 *.log
+# Artefactos regenerables / grandes
+infraestructura/*.geojson
+infraestructura/overpass_roads_raw.json
+metadata/*.geojson
+amenazas/*.geojson
+cache/
+data/
+
+# Entornos / secretos
+.venv/
+.env
