@@ -1,8 +1,5 @@
-# Ignora todos los JSON/GeoJSON en cualquier carpeta
 *.json
 *.geojson
-
-# Artefactos/regenerables típicos
 infraestructura/
 metadata/
 amenazas/
@@ -10,20 +7,9 @@ cache/
 data/
 outputs/
 results/
-
-# Python / entornos
-__pycache__/
-*.py[cod]
-.pytest_cache/
 .venv/
-env/
-ENV/
-
-# Secretos
 .env
-*.env
-
-# IDE / sistema
+__pycache__/
 .vscode/
 .DS_Store
 Thumbs.db
