@@ -1,13 +1,8 @@
-# =====================================================
-# Archivos JSON/GeoJSON (grandes / generados)
-# Ignora cualquier .json o .geojson en TODO el proyecto
-# =====================================================
+# Ignora todos los JSON/GeoJSON en cualquier carpeta
 *.json
 *.geojson
 
-# =====================================================
-# Carpetas comunes donde generas artefactos
-# =====================================================
+# Artefactos/regenerables típicos
 infraestructura/
 metadata/
 amenazas/
@@ -16,27 +11,19 @@ data/
 outputs/
 results/
 
-# =====================================================
 # Python / entornos
-# =====================================================
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
 .pytest_cache/
 .venv/
 env/
 ENV/
 
-# =====================================================
-# Secretos / configuración local
-# =====================================================
+# Secretos
 .env
 *.env
 
-# =====================================================
-# IDEs / sistema
-# =====================================================
+# IDE / sistema
 .vscode/
 .DS_Store
 Thumbs.db
