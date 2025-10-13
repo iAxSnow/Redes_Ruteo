@@ -1,36 +1,42 @@
-# Python
+# =====================================================
+# Archivos grandes / artefactos generados automáticamente
+# =====================================================
+*.json
+*.geojson
+
+# Salidas de infraestructura / metadata / amenazas
+infraestructura/*.json
+infraestructura/*.geojson
+metadata/*.json
+metadata/*.geojson
+amenazas/*.json
+amenazas/*.geojson
+
+# Caches y datos temporales
+cache/
+data/
+
+# =====================================================
+# Python / entornos
+# =====================================================
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
 .pytest_cache/
 .venv/
-venv/
 env/
 ENV/
-# OS / editors
-.DS_Store
-Thumbs.db
-.vscode/
-# Data / outputs
-data/
-*.sqlite
-*.db
-# Secrets / env
+
+# =====================================================
+# Secretos / configuración local
+# =====================================================
 .env
 *.env
-# Node
-node_modules/
-# Logs
-*.log
-# Artefactos regenerables / grandes
-infraestructura/*.geojson
-infraestructura/overpass_roads_raw.json
-metadata/*.geojson
-amenazas/*.geojson
-cache/
-data/
 
-# Entornos / secretos
-.venv/
-.env
+# =====================================================
+# IDEs / sistema
+# =====================================================
+.vscode/
+.DS_Store
+Thumbs.db
