@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ruteo Resiliente — Visualización</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .legend { background: white; padding: 6px 8px; border-radius: 4px; font: 12px/14px Arial; }
+    .legend .title { font-weight: bold; margin-bottom: 6px; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+  // Mapa base centrado en Santiago RM
+  const map = L.map('map').setView([-33.45, -70.65], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  const overlays = {};
+
+  // ===== Waze incidents layer =====
+  const wazeStylePoint = (f) => ({
+    radius: f.properties.subtype === "CLOSURE" ? 6 : 5,
+    weight: 1,
+    opacity: 1,
+    fillOpacity: 0.7
+  });
+
+  function pointToLayerWaze(feature, latlng) {
+    const color = feature.properties.subtype === "CLOSURE" ? "#d73027" : "#fc8d59";
+    return L.circleMarker(latlng, Object.assign(wazeStylePoint(feature), { color, fillColor: color }));
+  }
+
+  function styleLineWaze(feature) {
+    return {
+      weight: 4,
+      opacity: 0.8,
+      color: "#fee090" // jam
+    };
+  }
+
+  function popupWaze(feature, layer) {
+    const p = feature.properties || {};
+    const title = p.subtype === "TRAFFIC_JAM" ? "Tráfico (Waze)" :
+                  (p.subtype === "CLOSURE" ? "Cierre (Waze)" : "Incidente (Waze)");
+    const desc = p.description ? `<div>${p.description}</div>` : "";
+    const street = p.street ? `<div><b>Calle:</b> ${p.street}</div>` : "";
+    const sev = p.severity != null ? `<div><b>Severidad:</b> ${p.severity}</div>` : "";
+    layer.bindPopup(`<b>${title}</b>${desc}${street}${sev}`);
+  }
+
+  fetch('data/waze_incidents.geojson')
+    .then(r => r.json())
+    .then(gj => {
+      const wazeLayer = L.geoJSON(gj, {
+        pointToLayer: pointToLayerWaze,
+        style: styleLineWaze,
+        onEachFeature: popupWaze
+      });
+      overlays["Waze — Incidentes/Cierres"] = wazeLayer;
+      wazeLayer.addTo(map);
+      L.control.layers(null, overlays, { collapsed: false }).addTo(map);
+      try { map.fitBounds(wazeLayer.getBounds(), { maxZoom: 14 }); } catch(e) {}
+    })
+    .catch(() => {
+      console.warn("No se pudo cargar data/waze_incidents.geojson");
+      L.control.layers(null, overlays, { collapsed: false }).addTo(map);
+    });
+</script>
+</body>
+</html>
