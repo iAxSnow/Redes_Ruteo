@@ -1,20 +1,20 @@
 # =====================================================
-# Archivos grandes / artefactos generados automáticamente
+# Archivos JSON/GeoJSON (grandes / generados)
+# Ignora cualquier .json o .geojson en TODO el proyecto
 # =====================================================
 *.json
 *.geojson
 
-# Salidas de infraestructura / metadata / amenazas
-infraestructura/*.json
-infraestructura/*.geojson
-metadata/*.json
-metadata/*.geojson
-amenazas/*.json
-amenazas/*.geojson
-
-# Caches y datos temporales
+# =====================================================
+# Carpetas comunes donde generas artefactos
+# =====================================================
+infraestructura/
+metadata/
+amenazas/
 cache/
 data/
+outputs/
+results/
 
 # =====================================================
 # Python / entornos
