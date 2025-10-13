@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+cd "$(dirname "$0")/.."
+
 log(){ printf "\n\033[1;34m[ETL-PAR]\033[0m %s\n" "$*"; }
 warn(){ printf "\n\033[1;33m[WARN]\033[0m %s\n" "$*"; }
 runpy(){ local f="$1"; shift || true; if [[ -f "$f" ]]; then log "python $f $*"; python "$f" "$@"; else warn "No existe $f"; fi; }
