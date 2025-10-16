@@ -8,6 +8,9 @@ python loaders/load_threats_calming.py
 
 echo "[3/6] Waze incidents…"
 python amenazas/waze_incidents.py || echo "[warn] Waze extractor terminó con advertencias"
+if [[ -f "amenazas/waze_incidents.geojson" ]]; then
+  echo "[ETL] Waze features: $(jq '.features|length' amenazas/waze_incidents.geojson 2>/dev/null || echo '?')"
+fi
 echo "[4/6] Load Waze → DB…"
 python loaders/load_threats_waze.py
 

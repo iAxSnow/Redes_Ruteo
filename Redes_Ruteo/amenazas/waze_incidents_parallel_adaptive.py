@@ -1,16 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Waze fetcher adaptativo:
-- Rota endpoints y usa Referer
-- Si un tile devuelve 404 o error, lo subdivide en 4 (hasta profundidad 2)
+Waze fetcher adaptativo y paralelo:
+- Carga .env si existe para configurar AOI y opciones
+- Rota endpoints y usa Referer/UA válidos
+- Paraleliza por grilla configurable (WAZE_GRID, WAZE_PARALLEL)
+- Si un tile falla: subdivide recursivamente (hasta WAZE_MAX_DEPTH)
 - Permite WAZE_TYPES=alerts|traffic|irregularities (por defecto todos)
 
 Salida: amenazas/waze_incidents.geojson
 """
 import os, json, sys, time
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Load .env first so env reads below include file-based values
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 import requests
 
 ROOT = Path(__file__).resolve().parent
@@ -24,15 +35,22 @@ TIMEOUT=int(os.getenv("WAZE_TIMEOUT","40"))
 RETRIES=int(os.getenv("WAZE_RETRIES","3"))
 MAX_DEPTH=int(os.getenv("WAZE_MAX_DEPTH","2"))
 TYPES=os.getenv("WAZE_TYPES","alerts,traffic,irregularities")
+GRID=float(os.getenv("WAZE_GRID","0.25"))
+PAR=int(os.getenv("WAZE_PARALLEL","8"))
 
 ENDS=[
     "https://world-georss.waze.com/rtserver/web/TGeoRSS",
     "https://www.waze.com/rtserver/web/TGeoRSS",
-    "https://us-georss.waze.com/rtserver/web/TGeoRSS"
+    "https://us-georss.waze.com/rtserver/web/TGeoRSS",
+    "https://na-georss.waze.com/rtserver/web/TGeoRSS",
+    "https://row-georss.waze.com/rtserver/web/TGeoRSS",
 ]
 UA={
-    "User-Agent":"Mozilla/5.0",
-    "Referer":"https://www.waze.com/"
+    "User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Referer":"https://www.waze.com/",
+    "Accept":"application/json, text/javascript, */*; q=0.01",
+    "Accept-Language":"es-CL,es;q=0.9,en;q=0.8",
+    "Origin":"https://www.waze.com",
 }
 
 def fetch_box(s,w,n,e)->Dict[str,Any]:
@@ -103,6 +121,20 @@ def crawl(s,w,n,e,depth=0)->List[Dict[str,Any]]:
             out.extend(crawl(ss,ww,nn,ee,depth+1))
         return out
 
+def grid_cells(s,w,n,e,step: float):
+    if step <= 0:
+        yield (s,w,n,e)
+        return
+    lat=s
+    while lat < n:
+        lon=w
+        lat2 = min(n, lat + step)
+        while lon < e:
+            lon2 = min(e, lon + step)
+            yield (lat, lon, lat2, lon2)
+            lon = lon2
+        lat = lat2
+
 def dedupe(features):
     seen=set(); out=[]
     for f in features:
@@ -113,7 +145,21 @@ def dedupe(features):
     return out
 
 def main():
-    feats=crawl(BBOX_S,BBOX_W,BBOX_N,BBOX_E,0)
+    # Parallel crawl over grid cells
+    cells=list(grid_cells(BBOX_S,BBOX_W,BBOX_N,BBOX_E,GRID))
+    feats: List[Dict[str,Any]] = []
+    if PAR > 1 and len(cells) > 1:
+        with ThreadPoolExecutor(max_workers=PAR) as ex:
+            futures = {ex.submit(crawl, s,w,n,e,0): (s,w,n,e) for (s,w,n,e) in cells}
+            for fut in as_completed(futures):
+                try:
+                    feats.extend(fut.result())
+                except Exception:
+                    # Already logged inside crawl
+                    pass
+    else:
+        for (s,w,n,e) in cells:
+            feats.extend(crawl(s,w,n,e,0))
     uniq=dedupe(feats)
     OUT.write_text(json.dumps({"type":"FeatureCollection","features":uniq}, ensure_ascii=False), encoding="utf-8")
     print(f"[OK] saved {OUT} ({len(uniq)} features)")

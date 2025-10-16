@@ -37,6 +37,9 @@ runpy loaders/load_threats_calming.py
 
 log "Amenazas — Waze paralelo"
 runpy amenazas/waze_incidents_parallel.py || warn "Waze extractor warning"
+if [[ -f "amenazas/waze_incidents.geojson" ]]; then
+  echo "[ETL-PAR] Waze features: $(jq '.features|length' amenazas/waze_incidents.geojson 2>/dev/null || echo '?')"
+fi
 runpy loaders/load_threats_waze.py
 
 log "Amenazas — Weather paralelo"
