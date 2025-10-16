@@ -26,5 +26,5 @@
 }
 ```
 
-**Procedencia:** Endpoint público web de Waze (sujeto a cambios), script `amenazas/waze_incidents.py`.  
+**Procedencia:** Endpoint público web de Waze (sujeto a cambios), script `amenazas/waze_incidents_parallel_adaptive.py`.  
 **Uso:** evitar incidentes y congestiones relevantes.
