@@ -23,7 +23,7 @@ WITH feats AS (
            'type','Feature',
            'geometry', ST_AsGeoJSON(geom)::jsonb,
            'properties', jsonb_build_object(
-               'provider', provider,
+               'provider', 'WAZE',
                'ext_id', ext_id,
                'kind', kind,
                'subtype', subtype,
@@ -34,8 +34,7 @@ WITH feats AS (
                'timestamp', props->>'timestamp'
            )
          ) AS feature
-  FROM rr.threats_incidents
-  WHERE provider = 'WAZE'
+  FROM rr.amenazas_waze
 )
 SELECT jsonb_build_object('type','FeatureCollection','features', coalesce(jsonb_agg(feature), '[]'::jsonb)) AS fc
 FROM feats;

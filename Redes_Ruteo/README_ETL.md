@@ -22,10 +22,10 @@ Documentación: `docs/infra_ways.md`, `docs/infra_nodes.md`.
 Documentación: `docs/metadata_hydrants_siss_inspections.md`, `docs/metadata_hydrants_siss_summary.md`, `docs/metadata_road_widths.md`, `docs/metadata_road_oneway.md`.
 
 ## 3) Amenazas (3 fuentes)
-- **Reductores (OSM)**: `amenazas/traffic_calming_as_threats.py` → `traffic_calming_threats.geojson` → carga en `rr.threats_incidents`.
+- **Reductores (OSM)**: `amenazas/traffic_calming_as_threats_parallel.py` → `traffic_calming_threats.geojson` → carga en `rr.amenazas_calming`.
 - **Incidentes/Cierres (TomTom o Waze)**:  
   - TomTom: `amenazas/tomtom_incidents.py` → `tomtom_incidents.geojson` → `loaders/load_threats_tomtom.py`.  
-  - Waze (experimental): `amenazas/waze_incidents.py` → `waze_incidents.geojson` → `loaders/load_threats_waze.py`.
+  - Waze: `amenazas/waze_incidents_parallel_adaptive.py` → `waze_incidents.geojson` → `loaders/load_threats_waze.py`.
 - **Clima (OpenWeather)**: `amenazas/weather_openweather.py` → `weather_threats.geojson` → `loaders/load_threats_weather.py`.
 
 Documentación: `docs/threat_traffic_calming.md`, `docs/threat_tomtom_incidents.md`, `docs/threat_weather_openweather.md`, `docs/threat_waze_incidents.md`.
