@@ -16,9 +16,10 @@ python amenazas/waze_incidents_parallel_adaptive.py
 ```
 
 This will:
-1. Fetch data from Waze API for the configured bounding box
-2. Save results to `amenazas/waze_incidents.geojson`
-3. Automatically handle API failures by subdividing tiles
+1. Try to fetch data from Waze API endpoints
+2. If APIs fail, automatically scrape the live map webpage
+3. Save results to `amenazas/waze_incidents.geojson`
+4. Automatically handle failures by subdividing tiles
 
 ### Environment Variables
 
@@ -53,17 +54,28 @@ This generates realistic sample data that matches the actual API structure, usef
 - Demo purposes
 - When Waze API is down
 
-## API Endpoints
+## API Endpoints and Web Scraping
 
-The fetcher tries multiple Waze API endpoints in order:
+The fetcher uses a multi-layered approach to fetch Waze data:
+
+### Layer 1: API Endpoints
+Tries multiple Waze API endpoints in order:
 
 1. `https://www.waze.com/live-map/api/georss` - Primary modern API
 2. `https://www.waze.com/row-rtserver/web/TGeoRSS` - Rest of World server
 3. `https://www.waze.com/partnerhub-api/georss` - Partner Hub API
 
-If all endpoints fail, the script:
+### Layer 2: Web Scraping Fallback
+If all API endpoints fail, automatically falls back to scraping the live map webpage:
+- Accesses `https://www.waze.com/es/live-map` with the appropriate coordinates
+- Extracts incident data from embedded JSON in the page source
+- Filters results by the specified bounding box
+- Works even when API endpoints are blocked or unavailable
+
+### Layer 3: Tile Subdivision
+If both APIs and web scraping fail for a region:
 - Subdivides the bounding box into 4 smaller tiles
-- Retries each tile (up to MAX_DEPTH subdivisions)
+- Retries each tile independently (up to MAX_DEPTH subdivisions)
 - Preserves existing data file if no new data is fetched
 
 ## Output Format

@@ -3,13 +3,14 @@
 """
 Waze fetcher adaptativo:
 - Usa la API moderna de Waze Live Map (tile-based system)
+- Si las APIs fallan, intenta scraping del live map webpage
 - Sistema de tiles basado en zoom levels
 - Si un tile devuelve 404 o error, lo subdivide en 4 (hasta profundidad 2)
 - Extrae alerts, jams e irregularities
 
 Salida: amenazas/waze_incidents.geojson
 """
-import os, json, sys, time
+import os, json, sys, time, re
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
 import requests
@@ -82,8 +83,96 @@ def generate_simulated_data(s,w,n,e)->Dict[str,Any]:
     
     return {"alerts": alerts, "jams": jams, "irregularities": []}
 
+def fetch_from_live_map(s,w,n,e)->Dict[str,Any]:
+    """Fetch Waze data by scraping the live map webpage"""
+    import re
+    
+    # Calculate center point for the live map URL
+    center_lat = (s + n) / 2
+    center_lon = (w + e) / 2
+    zoom = 12  # Reasonable zoom level for metropolitan areas
+    
+    # Construct live map URL
+    live_map_url = f"https://www.waze.com/es/live-map?zoom={zoom}&lat={center_lat}&lon={center_lon}"
+    
+    try:
+        # Fetch the live map page
+        r = requests.get(live_map_url, headers=UA, timeout=TIMEOUT)
+        if r.status_code != 200:
+            raise Exception(f"HTTP {r.status_code}")
+        
+        html_content = r.text
+        
+        # Try to extract JSON data from various patterns in the page
+        # Pattern 1: Look for embedded JSON in script tags
+        patterns = [
+            r'window\.__REDUX_STATE__\s*=\s*({.+?});',
+            r'window\.__NEXT_DATA__\s*=\s*({.+?})</script>',
+            r'"alerts"\s*:\s*(\[.+?\])',
+            r'"jams"\s*:\s*(\[.+?\])',
+            r'"irregularities"\s*:\s*(\[.+?\])',
+        ]
+        
+        extracted_data = {"alerts": [], "jams": [], "irregularities": []}
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, html_content, re.DOTALL)
+            for match in matches:
+                try:
+                    # Try to parse as JSON
+                    data = json.loads(match)
+                    
+                    # If it's a dict with our keys, extract them
+                    if isinstance(data, dict):
+                        if "alerts" in data:
+                            extracted_data["alerts"].extend(data.get("alerts", []))
+                        if "jams" in data:
+                            extracted_data["jams"].extend(data.get("jams", []))
+                        if "irregularities" in data:
+                            extracted_data["irregularities"].extend(data.get("irregularities", []))
+                    # If it's an array, try to determine what type
+                    elif isinstance(data, list) and len(data) > 0:
+                        # Try to infer type from first element
+                        if "reportDescription" in str(data[0]) or "street" in str(data[0]):
+                            extracted_data["alerts"].extend(data)
+                        elif "line" in str(data[0]) or "speed" in str(data[0]):
+                            extracted_data["jams"].extend(data)
+                except:
+                    continue
+        
+        # Filter by bounding box
+        filtered_data = {"alerts": [], "jams": [], "irregularities": []}
+        
+        for alert in extracted_data.get("alerts", []):
+            loc = alert.get("location", {})
+            lat = loc.get("y") or loc.get("lat")
+            lon = loc.get("x") or loc.get("lon")
+            if lat and lon and s <= lat <= n and w <= lon <= e:
+                filtered_data["alerts"].append(alert)
+        
+        for jam in extracted_data.get("jams", []):
+            # Check if any point of the jam is in the bbox
+            line = jam.get("line", [])
+            if any(s <= p.get("y", 0) <= n and w <= p.get("x", 0) <= e for p in line):
+                filtered_data["jams"].append(jam)
+        
+        for irr in extracted_data.get("irregularities", []):
+            seg = irr.get("seg", {})
+            lat = seg.get("y") or seg.get("lat")
+            lon = seg.get("x") or seg.get("lon")
+            if lat and lon and s <= lat <= n and w <= lon <= e:
+                filtered_data["irregularities"].append(irr)
+        
+        if any(filtered_data.values()):
+            return filtered_data
+        
+        raise Exception("No data extracted from live map")
+        
+    except Exception as ex:
+        raise RuntimeError(f"Live map scraping failed: {ex}")
+
 def fetch_box(s,w,n,e)->Dict[str,Any]:
-    """Fetch Waze data for a bounding box using modern API endpoints"""
+    """Fetch Waze data for a bounding box using modern API endpoints and web scraping"""
     # If simulation mode is enabled, return simulated data
     if SIMULATE:
         return generate_simulated_data(s,w,n,e)
@@ -107,6 +196,7 @@ def fetch_box(s,w,n,e)->Dict[str,Any]:
     
     last_error = None
     for k in range(RETRIES):
+        # First try API endpoints
         for base_url in endpoints:
             try:
                 r = requests.get(base_url, params=params, headers=UA, timeout=TIMEOUT)
@@ -127,6 +217,14 @@ def fetch_box(s,w,n,e)->Dict[str,Any]:
             except Exception as ex:
                 last_error = f"{base_url} -> {str(ex)}"
                 time.sleep(0.5 * (k + 1))
+        
+        # If API endpoints failed, try web scraping as fallback
+        try:
+            sys.stderr.write(f"[info] API endpoints failed, trying web scraping...\n")
+            return fetch_from_live_map(s, w, n, e)
+        except Exception as ex:
+            last_error = f"Web scraping also failed: {ex}"
+            time.sleep(0.5 * (k + 1))
     
     raise RuntimeError(last_error if last_error else "Unknown error")
 
