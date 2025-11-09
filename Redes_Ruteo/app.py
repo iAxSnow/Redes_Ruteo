@@ -407,13 +407,13 @@ def api_calculate_route():
         app.logger.error(f"Database error calculating route: {str(db_err)}")
         return jsonify({
             "error": "Error de base de datos al calcular ruta",
-            "details": str(db_err)
+            "details": "Error al conectar con la base de datos. Revisa los logs del servidor para más información."
         }), 500
     except Exception as e:
         app.logger.error(f"Error calculating route: {str(e)}")
         return jsonify({
             "error": "No se pudo calcular la ruta",
-            "details": str(e)
+            "details": "Error inesperado. Revisa los logs del servidor para más información."
         }), 500
 
 
@@ -479,13 +479,13 @@ def api_simulate_failures():
         app.logger.error(f"Database error simulating failures: {str(db_err)}")
         return jsonify({
             "error": "Error de base de datos al simular fallas",
-            "details": str(db_err)
+            "details": "Error al conectar con la base de datos. Revisa los logs del servidor para más información."
         }), 500
     except Exception as e:
         app.logger.error(f"Error simulating failures: {str(e)}")
         return jsonify({
             "error": "No se pudo simular fallas",
-            "details": str(e)
+            "details": "Error inesperado. Revisa los logs del servidor para más información."
         }), 500
 
 
