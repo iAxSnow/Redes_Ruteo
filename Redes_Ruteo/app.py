@@ -152,12 +152,17 @@ def api_threats():
         return jsonify(geojson)
     
     except Exception as e:
+        # Log the error for debugging but don't expose details to clients
+        app.logger.error(f"Error loading threats: {str(e)}")
         return jsonify({
             "type": "FeatureCollection",
             "features": [],
-            "error": str(e)
+            "error": "Failed to load threat data"
         }), 500
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Debug mode should be disabled in production
+    # Set via environment variable: export FLASK_DEBUG=1 for development
+    debug_mode = os.getenv('FLASK_DEBUG', '0') == '1'
+    app.run(debug=debug_mode, host='0.0.0.0', port=5000)

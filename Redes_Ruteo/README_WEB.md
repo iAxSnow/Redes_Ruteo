@@ -42,6 +42,9 @@ PGPORT=5432
 PGDATABASE=rr
 PGUSER=postgres
 PGPASSWORD=postgres
+
+# Optional: Enable debug mode for development (NOT for production)
+# FLASK_DEBUG=1
 ```
 
 3. Ensure PostgreSQL database is running with the schema loaded:
