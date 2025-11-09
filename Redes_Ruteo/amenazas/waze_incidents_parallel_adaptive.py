@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 Waze fetcher adaptativo:
-- Usa endpoints modernos de Waze (row-rtserver para rest of world)
-- Rota endpoints y usa Referer
+- Usa la API moderna de Waze Live Map (tile-based system)
+- Sistema de tiles basado en zoom levels
 - Si un tile devuelve 404 o error, lo subdivide en 4 (hasta profundidad 2)
-- Permite WAZE_TYPES=alerts|traffic|irregularities (por defecto todos)
+- Extrae alerts, jams e irregularities
 
 Salida: amenazas/waze_incidents.geojson
 """
@@ -21,70 +21,167 @@ BBOX_S=float(os.getenv("BBOX_S","-33.8"))
 BBOX_W=float(os.getenv("BBOX_W","-70.95"))
 BBOX_N=float(os.getenv("BBOX_N","-33.2"))
 BBOX_E=float(os.getenv("BBOX_E","-70.45"))
-TIMEOUT=int(os.getenv("WAZE_TIMEOUT","40"))
-RETRIES=int(os.getenv("WAZE_RETRIES","3"))
+TIMEOUT=int(os.getenv("WAZE_TIMEOUT","30"))
+RETRIES=int(os.getenv("WAZE_RETRIES","2"))
 MAX_DEPTH=int(os.getenv("WAZE_MAX_DEPTH","2"))
-TYPES=os.getenv("WAZE_TYPES","alerts,traffic,irregularities")
 
-ENDS=[
-    "https://www.waze.com/row-rtserver/web/TGeoRSS",
-    "https://www.waze.com/rtserver/web/TGeoRSS",
-    "https://www.waze.com/il-rtserver/web/TGeoRSS"
-]
+# Modern Waze Live Map API endpoint
+WAZE_API_BASE = "https://www.waze.com/live-map/api/georss"
+
 UA={
     "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Referer":"https://www.waze.com/live-map",
-    "Accept":"application/json, text/plain, */*",
-    "Accept-Language":"es-ES,es;q=0.9,en;q=0.8"
+    "Accept":"*/*",
+    "Accept-Language":"es-ES,es;q=0.9,en;q=0.8",
+    "Origin":"https://www.waze.com"
 }
 
 def fetch_box(s,w,n,e)->Dict[str,Any]:
-    params={"types":TYPES,"left":w,"right":e,"top":n,"bottom":s,"format":"JSON"}
-    last=None
+    """Fetch Waze data for a bounding box using modern API endpoints"""
+    # Try multiple endpoint patterns with proper lat/lon bounds
+    params = {
+        "bottom": s,
+        "left": w, 
+        "top": n,
+        "right": e,
+        "types": "alerts,traffic,irregularities",
+        "format": "JSON"
+    }
+    
+    # Modern Waze API endpoints to try
+    endpoints = [
+        "https://www.waze.com/live-map/api/georss",
+        "https://www.waze.com/row-rtserver/web/TGeoRSS",
+        "https://www.waze.com/partnerhub-api/georss"
+    ]
+    
+    last_error = None
     for k in range(RETRIES):
-        for base in ENDS:
+        for base_url in endpoints:
             try:
-                r=requests.get(base, params=params, headers=UA, timeout=TIMEOUT)
-                if r.status_code==200:
+                r = requests.get(base_url, params=params, headers=UA, timeout=TIMEOUT)
+                if r.status_code == 200:
                     try:
-                        return r.json()
+                        data = r.json()
+                        # Check if we got valid data
+                        if data and isinstance(data, dict):
+                            return data
                     except Exception as je:
-                        last=je; time.sleep(0.5*(k+1)); continue
+                        last_error = f"JSON parse error: {je}"
+                        pass
+                elif r.status_code == 404:
+                    last_error = f"{base_url} -> HTTP 404"
                 else:
-                    last=Exception(f"{base} -> HTTP {r.status_code}")
-                    time.sleep(0.6*(k+1))
+                    last_error = f"{base_url} -> HTTP {r.status_code}"
+                time.sleep(0.3 * (k + 1))
             except Exception as ex:
-                last=ex; time.sleep(0.7*(k+1))
-    raise RuntimeError(last)
+                last_error = f"{base_url} -> {str(ex)}"
+                time.sleep(0.5 * (k + 1))
+    
+    raise RuntimeError(last_error if last_error else "Unknown error")
 
 def to_features(ch:Dict[str,Any])->List[Dict[str,Any]]:
+    """Convert Waze API response to GeoJSON features"""
     feats=[]
+    
+    # Process alerts
     for a in ch.get("alerts",[]) or []:
-        loc=a.get("location") or {}; lon=loc.get("x"); lat=loc.get("y")
-        if lon is None or lat is None: continue
+        loc=a.get("location") or {}
+        lon=loc.get("x") or loc.get("lon") or loc.get("longitude")
+        lat=loc.get("y") or loc.get("lat") or loc.get("latitude")
+        
+        if lon is None or lat is None: 
+            continue
+            
         typ=(a.get("type") or "").upper()
-        subtype="CLOSURE" if "CLOS" in typ else "INCIDENT"
-        sev=2 if subtype=="CLOSURE" else 1
-        props={"provider":"WAZE","ext_id":a.get("uuid") or a.get("id") or f"alert:{lon},{lat}",
-               "kind":"incident","subtype":subtype,"severity":sev,
-               "description":a.get("reportDescription") or a.get("street"),
-               "street":a.get("street"),"type_raw":a.get("type"),
-               "timestamp":a.get("pubMillis")}
-        feats.append({"type":"Feature","geometry":{"type":"Point","coordinates":[lon,lat]},"properties":props})
+        subtype=(a.get("subtype") or "").upper()
+        
+        # Determine severity and subtype
+        if "CLOS" in typ or "ROAD_CLOSED" in typ:
+            subtype="CLOSURE"
+            sev=3
+        elif "JAM" in typ:
+            subtype="TRAFFIC_JAM"
+            sev=2
+        elif "ACCIDENT" in typ or "CRASH" in typ:
+            subtype="ACCIDENT"
+            sev=3
+        elif "HAZARD" in typ:
+            subtype="HAZARD"
+            sev=2
+        else:
+            subtype="INCIDENT"
+            sev=1
+        
+        props={
+            "provider":"WAZE",
+            "ext_id":a.get("uuid") or a.get("id") or f"alert:{lon},{lat}",
+            "kind":"incident",
+            "subtype":subtype,
+            "severity":sev,
+            "description":a.get("reportDescription") or a.get("street") or typ,
+            "street":a.get("street"),
+            "type_raw":a.get("type"),
+            "timestamp":a.get("pubMillis") or a.get("reportTimestamp")
+        }
+        feats.append({
+            "type":"Feature",
+            "geometry":{"type":"Point","coordinates":[lon,lat]},
+            "properties":props
+        })
+    
+    # Process jams (traffic)
     for j in ch.get("jams",[]) or []:
-        line=j.get("line") or []; coords=[[p["x"],p["y"]] for p in line if "x" in p and "y" in p]
+        line=j.get("line") or []
+        coords=[]
+        for p in line:
+            x = p.get("x") or p.get("lon") or p.get("longitude")
+            y = p.get("y") or p.get("lat") or p.get("latitude")
+            if x is not None and y is not None:
+                coords.append([x, y])
+        
         if len(coords)>=2:
-            props={"provider":"WAZE","ext_id":j.get("uuid") or j.get("id") or f"jam:{len(coords)}",
-                   "kind":"incident","subtype":"TRAFFIC_JAM","severity":1,
-                   "metrics":{"speed_kmh":j.get("speed")},"timestamp":j.get("pubMillis")}
-            feats.append({"type":"Feature","geometry":{"type":"LineString","coordinates":coords},"properties":props})
+            speed_kmh = j.get("speed") or j.get("speedKMH")
+            level = j.get("level") or 0
+            sev = 1 if level <= 2 else 2 if level <= 4 else 3
+            
+            props={
+                "provider":"WAZE",
+                "ext_id":j.get("uuid") or j.get("id") or f"jam:{len(coords)}",
+                "kind":"incident",
+                "subtype":"TRAFFIC_JAM",
+                "severity":sev,
+                "metrics":{"speed_kmh":speed_kmh, "level": level},
+                "timestamp":j.get("pubMillis") or j.get("updateTimestamp")
+            }
+            feats.append({
+                "type":"Feature",
+                "geometry":{"type":"LineString","coordinates":coords},
+                "properties":props
+            })
+    
+    # Process irregularities
     for irr in ch.get("irregularities",[]) or []:
-        seg=irr.get("seg") or {}; lon=seg.get("x"); lat=seg.get("y")
+        seg=irr.get("seg") or irr.get("location") or {}
+        lon=seg.get("x") or seg.get("lon") or seg.get("longitude")
+        lat=seg.get("y") or seg.get("lat") or seg.get("latitude")
+        
         if lon is not None and lat is not None:
-            props={"provider":"WAZE","ext_id":irr.get("id") or f"irr:{lon},{lat}",
-                   "kind":"incident","subtype":"IRREGULARITY","severity":1,
-                   "metrics":{"speed_kmh":irr.get("speed")},"timestamp":irr.get("pubMillis")}
-            feats.append({"type":"Feature","geometry":{"type":"Point","coordinates":[lon,lat]},"properties":props})
+            props={
+                "provider":"WAZE",
+                "ext_id":irr.get("id") or f"irr:{lon},{lat}",
+                "kind":"incident",
+                "subtype":"IRREGULARITY",
+                "severity":1,
+                "metrics":{"speed_kmh":irr.get("speed")},
+                "timestamp":irr.get("pubMillis") or irr.get("detectionTime")
+            }
+            feats.append({
+                "type":"Feature",
+                "geometry":{"type":"Point","coordinates":[lon,lat]},
+                "properties":props
+            })
+    
     return feats
 
 def subdivide(s,w,n,e):
@@ -92,10 +189,13 @@ def subdivide(s,w,n,e):
     return [(s,w,mlat,mlon),(s,mlon,mlat,e),(mlat,w,n,mlon),(mlat,mlon,n,e)]
 
 def crawl(s,w,n,e,depth=0)->List[Dict[str,Any]]:
+    """Recursively crawl tiles, subdividing on errors"""
     try:
         data=fetch_box(s,w,n,e)
         feats=to_features(data)
-        if feats: return feats
+        if feats: 
+            sys.stderr.write(f"[ok] tile {s:.4f},{w:.4f},{n:.4f},{e:.4f} -> {len(feats)} features\n")
+            return feats
         # Si no hay features pero tampoco error, no subdividir indefinidamente
         return []
     except Exception as ex:
@@ -116,19 +216,35 @@ def dedupe(features):
     return out
 
 def main():
-    feats=crawl(BBOX_S,BBOX_W,BBOX_N,BBOX_E,0)
-    uniq=dedupe(feats)
+    """Main function to fetch Waze data and save as GeoJSON"""
+    print(f"[INFO] Fetching Waze data for bbox: S={BBOX_S}, W={BBOX_W}, N={BBOX_N}, E={BBOX_E}")
     
-    # Don't overwrite existing file if no features were found
-    if len(uniq) == 0:
+    try:
+        feats=crawl(BBOX_S,BBOX_W,BBOX_N,BBOX_E,0)
+        uniq=dedupe(feats)
+        
+        # Don't overwrite existing file if no features were found
+        if len(uniq) == 0:
+            if OUT.exists():
+                print(f"[WARN] No features fetched. Keeping existing {OUT} to preserve data.")
+                return
+            else:
+                print(f"[WARN] No features fetched and no existing file.")
+                # Create empty file so loader knows we tried
+                OUT.write_text(json.dumps({"type":"FeatureCollection","features":[]}, ensure_ascii=False), encoding="utf-8")
+                return
+        
+        # Save the fetched data
+        OUT.write_text(json.dumps({"type":"FeatureCollection","features":uniq}, ensure_ascii=False), encoding="utf-8")
+        print(f"[OK] Saved {OUT} ({len(uniq)} features)")
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch Waze data: {e}")
         if OUT.exists():
-            print(f"[WARN] No features fetched. Keeping existing {OUT} to preserve data.")
-            return
+            print(f"[INFO] Keeping existing {OUT} to preserve data.")
         else:
-            print(f"[WARN] No features fetched and no existing file. Creating empty file.")
-    
-    OUT.write_text(json.dumps({"type":"FeatureCollection","features":uniq}, ensure_ascii=False), encoding="utf-8")
-    print(f"[OK] saved {OUT} ({len(uniq)} features)")
+            print(f"[INFO] Creating empty file at {OUT}")
+            OUT.write_text(json.dumps({"type":"FeatureCollection","features":[]}, ensure_ascii=False), encoding="utf-8")
 
 if __name__=="__main__":
     main()
