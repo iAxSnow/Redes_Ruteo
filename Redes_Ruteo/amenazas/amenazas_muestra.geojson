@@ -1,0 +1,61 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-70.64827, -33.43793]
+      },
+      "properties": {
+        "provider": "SAMPLE",
+        "ext_id": "sample_jam_1",
+        "kind": "incident",
+        "subtype": "TRAFFIC_JAM",
+        "severity": 1,
+        "description": "Tráfico denso (muestra)",
+        "street": "Av. Providencia"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-70.66, -33.45],
+            [-70.65, -33.45],
+            [-70.65, -33.44],
+            [-70.66, -33.44],
+            [-70.66, -33.45]
+          ]
+        ]
+      },
+      "properties": {
+        "provider": "SAMPLE",
+        "ext_id": "sample_hazard_1",
+        "kind": "incident",
+        "subtype": "INCIDENT",
+        "severity": 2,
+        "description": "Calle en mal estado (muestra)",
+        "street": "Calle Ejemplo"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-70.6693, -33.4489]
+      },
+      "properties": {
+        "provider": "SAMPLE",
+        "ext_id": "sample_closure_1",
+        "kind": "incident",
+        "subtype": "CLOSURE",
+        "severity": 2,
+        "description": "Cierre por construcción (muestra)",
+        "street": "Av. Los Leones"
+      }
+    }
+  ]
+}
