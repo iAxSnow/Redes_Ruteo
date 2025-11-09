@@ -24,6 +24,7 @@ BBOX_E=float(os.getenv("BBOX_E","-70.45"))
 TIMEOUT=int(os.getenv("WAZE_TIMEOUT","30"))
 RETRIES=int(os.getenv("WAZE_RETRIES","2"))
 MAX_DEPTH=int(os.getenv("WAZE_MAX_DEPTH","2"))
+SIMULATE=os.getenv("WAZE_SIMULATE","false").lower() in ("true", "1", "yes")
 
 # Modern Waze Live Map API endpoint
 WAZE_API_BASE = "https://www.waze.com/live-map/api/georss"
@@ -36,8 +37,57 @@ UA={
     "Origin":"https://www.waze.com"
 }
 
+def generate_simulated_data(s,w,n,e)->Dict[str,Any]:
+    """Generate simulated Waze data for testing when API is unavailable"""
+    import random
+    random.seed(hash((s,w,n,e)))
+    
+    # Generate 2-5 random incidents in the bbox
+    num_incidents = random.randint(2, 5)
+    alerts = []
+    jams = []
+    
+    for i in range(num_incidents):
+        lat = random.uniform(s, n)
+        lon = random.uniform(w, e)
+        
+        incident_types = ["ACCIDENT", "HAZARD_ON_ROAD", "ROAD_CLOSED", "JAM"]
+        incident_type = random.choice(incident_types)
+        
+        if incident_type == "JAM":
+            # Create a traffic jam with a line
+            num_points = random.randint(3, 8)
+            line = []
+            for j in range(num_points):
+                offset = j * 0.002
+                line.append({"x": lon + offset, "y": lat + offset * 0.5})
+            
+            jams.append({
+                "uuid": f"sim_jam_{hash((s,w,n,e,i))}",
+                "line": line,
+                "speed": random.randint(5, 30),
+                "level": random.randint(1, 5),
+                "pubMillis": int(time.time() * 1000)
+            })
+        else:
+            # Create an alert
+            alerts.append({
+                "uuid": f"sim_alert_{hash((s,w,n,e,i))}",
+                "location": {"x": lon, "y": lat},
+                "type": incident_type,
+                "street": f"Calle Simulada {i+1}",
+                "reportDescription": f"Incident simulado tipo {incident_type}",
+                "pubMillis": int(time.time() * 1000)
+            })
+    
+    return {"alerts": alerts, "jams": jams, "irregularities": []}
+
 def fetch_box(s,w,n,e)->Dict[str,Any]:
     """Fetch Waze data for a bounding box using modern API endpoints"""
+    # If simulation mode is enabled, return simulated data
+    if SIMULATE:
+        return generate_simulated_data(s,w,n,e)
+    
     # Try multiple endpoint patterns with proper lat/lon bounds
     params = {
         "bottom": s,
@@ -217,7 +267,8 @@ def dedupe(features):
 
 def main():
     """Main function to fetch Waze data and save as GeoJSON"""
-    print(f"[INFO] Fetching Waze data for bbox: S={BBOX_S}, W={BBOX_W}, N={BBOX_N}, E={BBOX_E}")
+    mode_str = "SIMULATION" if SIMULATE else "LIVE"
+    print(f"[INFO] Fetching Waze data ({mode_str} mode) for bbox: S={BBOX_S}, W={BBOX_W}, N={BBOX_N}, E={BBOX_E}")
     
     try:
         feats=crawl(BBOX_S,BBOX_W,BBOX_N,BBOX_E,0)
