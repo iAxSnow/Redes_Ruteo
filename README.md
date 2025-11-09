@@ -1,1 +1,169 @@
 # Redes_Ruteo
+
+Sistema de ruteo resiliente para la Región Metropolitana de Chile con análisis de amenazas y cálculo de rutas óptimas.
+
+## Descripción
+
+Este proyecto implementa un sistema completo de ruteo resiliente que:
+- Extrae y procesa datos de infraestructura vial desde OpenStreetMap
+- Recopila amenazas en tiempo real desde múltiples fuentes (Waze, clima, reductores de velocidad)
+- Calcula probabilidades de falla para segmentos de red
+- Proporciona una interfaz web interactiva para visualización y cálculo de rutas
+- Implementa múltiples algoritmos de ruteo (Dijkstra, A*) con diferentes funciones de costo
+
+## Características
+
+✨ **Interfaz Web Interactiva**: Mapa interactivo con Leaflet para visualizar amenazas y rutas
+🗺️ **Múltiples Algoritmos**: Dijkstra (distancia), Dijkstra (probabilidad), A* (probabilidad), Dijkstra filtrado
+🚨 **Datos de Amenazas en Tiempo Real**: Integración con API de Waze para incidentes y tráfico
+📊 **Análisis de Probabilidad**: Modelo de probabilidad de falla basado en amenazas
+🔄 **Sistema Resiliente**: Datos de muestra de respaldo cuando las APIs externas fallan
+🎯 **Simulación de Fallas**: Simula fallas en la red basándose en probabilidades
+
+## Requisitos
+
+- Python 3.8+
+- PostgreSQL 12+ con extensión PostGIS
+- Docker y Docker Compose (opcional, recomendado)
+
+## Instalación Rápida
+
+1. **Clonar el repositorio**
+```bash
+git clone https://github.com/iAxSnow/Redes_Ruteo.git
+cd Redes_Ruteo/Redes_Ruteo
+```
+
+2. **Configurar base de datos**
+```bash
+# Iniciar PostgreSQL con Docker
+docker-compose up -d
+
+# Cargar esquema
+psql -U postgres -h localhost -d rr -f schema.sql
+```
+
+3. **Instalar dependencias**
+```bash
+pip install -r requirements.txt
+```
+
+4. **Configurar variables de entorno**
+Crear archivo `.env`:
+```env
+PGHOST=localhost
+PGPORT=5432
+PGDATABASE=rr
+PGUSER=postgres
+PGPASSWORD=postgres
+
+# Área de interés (Santiago, Chile)
+BBOX_S=-33.8
+BBOX_W=-70.95
+BBOX_N=-33.2
+BBOX_E=-70.45
+```
+
+## Uso
+
+### 1. Cargar Infraestructura (OSM)
+```bash
+# Extraer datos de OSM
+python infraestructura/osm_roads_overpass_parallel.py
+
+# Cargar en base de datos
+python loaders/load_ways_nodes.py
+```
+
+### 2. Cargar Amenazas
+```bash
+# Extraer amenazas de Waze (opcional, usa datos de muestra si falla)
+python amenazas/waze_incidents_parallel_adaptive.py
+
+# Cargar amenazas en base de datos
+python loaders/load_threats_waze.py
+
+# Otros extractores de amenazas (opcional)
+python amenazas/traffic_calming_as_threats_parallel.py
+python amenazas/weather_openweather_parallel.py
+```
+
+### 3. Calcular Probabilidades de Falla
+```bash
+python scripts/probability_model.py
+```
+
+### 4. Iniciar Interfaz Web
+```bash
+python app.py
+```
+
+Abrir navegador en http://localhost:5000
+
+## Estructura del Proyecto
+
+```
+Redes_Ruteo/
+├── amenazas/                      # ETL de amenazas
+│   ├── waze_incidents_parallel_adaptive.py
+│   ├── amenazas_muestra.geojson  # Datos de respaldo
+│   ├── traffic_calming_as_threats_parallel.py
+│   └── weather_openweather_parallel.py
+├── infraestructura/               # ETL de infraestructura OSM
+│   └── osm_roads_overpass_parallel.py
+├── loaders/                       # Cargadores de base de datos
+│   ├── load_ways_nodes.py
+│   ├── load_threats_waze.py
+│   └── load_metadata.py
+├── scripts/                       # Scripts de análisis
+│   └── probability_model.py
+├── app.py                         # Servidor Flask
+├── templates/                     # Plantillas HTML
+│   └── index.html
+├── static/                        # Recursos estáticos
+│   ├── css/
+│   └── js/
+│       └── main.js
+├── schema.sql                     # Esquema de base de datos
+├── requirements.txt               # Dependencias Python
+└── README*.md                     # Documentación
+```
+
+## Documentación Adicional
+
+- [README_WEB.md](README_WEB.md) - Documentación de la interfaz web
+- [README_ETL.md](README_ETL.md) - Documentación del pipeline ETL
+- [README_ROUTING.md](README_ROUTING.md) - Documentación de algoritmos de ruteo
+- [README_ADVANCED.md](README_ADVANCED.md) - Características avanzadas
+
+## Solución de Problemas
+
+### La API de Waze devuelve errores 404
+El sistema ahora usa automáticamente datos de muestra cuando la API de Waze falla. Los datos de muestra están en `amenazas/amenazas_muestra.geojson`.
+
+### No se pueden calcular rutas
+- Verifica que los datos de infraestructura estén cargados: `SELECT COUNT(*) FROM rr.ways;`
+- Asegúrate de que los puntos de inicio y fin estén dentro del área de cobertura
+- Revisa los logs del servidor Flask para mensajes de error detallados
+
+### La base de datos no está conectada
+- Verifica que PostgreSQL esté ejecutándose: `docker-compose ps`
+- Verifica las credenciales en `.env`
+- Prueba la conexión: `psql -U postgres -h localhost -d rr`
+
+## Contribuir
+
+Las contribuciones son bienvenidas. Por favor:
+1. Haz fork del repositorio
+2. Crea una rama para tu feature (`git checkout -b feature/AmazingFeature`)
+3. Commit tus cambios (`git commit -m 'Add some AmazingFeature'`)
+4. Push a la rama (`git push origin feature/AmazingFeature`)
+5. Abre un Pull Request
+
+## Licencia
+
+Este proyecto está bajo la Licencia MIT.
+
+## Contacto
+
+Proyecto desarrollado para el curso de Redes y Ruteo, Universidad de Chile.

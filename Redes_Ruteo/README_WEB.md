@@ -1,41 +1,43 @@
-# Web Interface for Routing Project
+# Interfaz Web para el Proyecto de Ruteo
 
-This directory contains the Flask-based web interface for the routing project.
+Este directorio contiene la interfaz web basada en Flask para el proyecto de ruteo.
 
-## Structure
+## Estructura
 
 ```
 Redes_Ruteo/
-├── app.py                  # Flask server with main routes and API
+├── app.py                  # Servidor Flask con rutas principales y API
 ├── templates/
-│   └── index.html         # Main HTML template
+│   └── index.html         # Plantilla HTML principal
 ├── static/
 │   ├── css/
-│   │   └── style.css      # Styling for map and control panel
+│   │   └── style.css      # Estilos para mapa y panel de control
 │   └── js/
-│       └── main.js        # Frontend logic for map and threats
-├── requirements.txt        # Python dependencies including Flask
-└── .env                   # Environment variables (not in repo)
+│       └── main.js        # Lógica frontend para mapa y amenazas
+├── requirements.txt        # Dependencias de Python incluyendo Flask
+└── .env                   # Variables de entorno (no en el repo)
 ```
 
-## Features
+## Características
 
-1. **Interactive Map**: Leaflet-based map centered on Santiago, Chile
-2. **Geolocation**: Button to center map on user's location
-3. **Threat Visualization**: Display threats from multiple sources (Waze, Traffic Calming, Weather)
-4. **Layer Control**: Checkbox to show/hide threat markers
-5. **Threat Details**: Click on markers to see detailed information in popups
-6. **Statistics**: Real-time count of threats by source
+1. **Mapa Interactivo**: Mapa basado en Leaflet centrado en Santiago, Chile
+2. **Geolocalización**: Botón para centrar el mapa en la ubicación del usuario
+3. **Visualización de Amenazas**: Muestra amenazas de múltiples fuentes (Waze, Reductores de Velocidad, Clima)
+4. **Control de Capas**: Checkbox para mostrar/ocultar marcadores de amenazas
+5. **Detalles de Amenazas**: Haz clic en los marcadores para ver información detallada en ventanas emergentes
+6. **Estadísticas**: Conteo en tiempo real de amenazas por fuente
+7. **Cálculo de Rutas**: Calcula múltiples rutas óptimas usando diferentes algoritmos (Dijkstra, A*)
+8. **Simulación de Fallas**: Simula fallas en la red basándose en probabilidades
 
-## Installation
+## Instalación
 
-1. Install Python dependencies:
+1. Instalar dependencias de Python:
 ```bash
 cd Redes_Ruteo
 pip install -r requirements.txt
 ```
 
-2. Set up environment variables (create `.env` file):
+2. Configurar variables de entorno (crear archivo `.env`):
 ```
 PGHOST=localhost
 PGPORT=5432
@@ -43,34 +45,41 @@ PGDATABASE=rr
 PGUSER=postgres
 PGPASSWORD=postgres
 
-# Optional: Enable debug mode for development (NOT for production)
+# Opcional: Habilitar modo de depuración para desarrollo (NO para producción)
 # FLASK_DEBUG=1
 ```
 
-3. Ensure PostgreSQL database is running with the schema loaded:
+3. Asegurarse de que la base de datos PostgreSQL esté ejecutándose con el esquema cargado:
 ```bash
 docker-compose up -d
 ```
 
-## Running the Application
+4. Cargar datos de amenazas:
+```bash
+# Cargar datos de muestra o ejecutar extractores de Waze
+cd Redes_Ruteo
+python loaders/load_threats_waze.py
+```
 
-Start the Flask development server:
+## Ejecutar la Aplicación
+
+Iniciar el servidor de desarrollo Flask:
 ```bash
 cd Redes_Ruteo
 python app.py
 ```
 
-The application will be available at http://localhost:5000
+La aplicación estará disponible en http://localhost:5000
 
-## API Endpoints
+## Endpoints de la API
 
 ### GET /
-Returns the main web interface.
+Devuelve la interfaz web principal.
 
 ### GET /api/threats
-Returns all threats from the database as GeoJSON FeatureCollection.
+Devuelve todas las amenazas de la base de datos como una FeatureCollection GeoJSON.
 
-**Response format:**
+**Formato de respuesta:**
 ```json
 {
   "type": "FeatureCollection",
@@ -94,18 +103,72 @@ Returns all threats from the database as GeoJSON FeatureCollection.
 }
 ```
 
-## Development
+### POST /api/calculate_route
+Calcula rutas óptimas entre dos puntos usando diferentes algoritmos.
 
-The application uses:
-- **Flask 3.0.0**: Web framework
-- **Leaflet 1.9.4**: Interactive map library
-- **PostgreSQL + PostGIS**: Spatial database
-- **psycopg2**: PostgreSQL adapter for Python
+**Parámetros de entrada:**
+```json
+{
+  "start": {"lat": -33.45, "lng": -70.65},
+  "end": {"lat": -33.43, "lng": -70.64},
+  "algorithm": "all"
+}
+```
 
-## Next Steps
+**Respuesta:**
+```json
+{
+  "dijkstra_dist": {
+    "route_geojson": {...},
+    "compute_time_ms": 45.2,
+    "algorithm": "Dijkstra (Distancia)"
+  },
+  "dijkstra_prob": {...},
+  "astar_prob": {...},
+  "filtered_dijkstra": {...}
+}
+```
 
-Future enhancements will include:
-- Route calculation interface
-- Failure simulation controls
-- Real-time route updates based on threats
-- Cost function visualization
+### POST /api/simulate_failures
+Simula fallas en elementos de la red basándose en sus probabilidades de falla.
+
+**Respuesta:**
+```json
+{
+  "failed_edges": [1, 5, 23, ...],
+  "failed_nodes": [12, 45, ...],
+  "total_failed": 42
+}
+```
+
+## Desarrollo
+
+La aplicación usa:
+- **Flask 3.0.0**: Framework web
+- **Leaflet 1.9.4**: Biblioteca de mapas interactivos
+- **PostgreSQL + PostGIS**: Base de datos espacial
+- **psycopg2**: Adaptador PostgreSQL para Python
+
+## Solución de Problemas
+
+### La aplicación no puede conectarse a la base de datos
+- Verifica que PostgreSQL esté ejecutándose: `docker-compose ps`
+- Verifica las credenciales en el archivo `.env`
+- Asegúrate de que el esquema esté cargado: `psql -U postgres -d rr -f schema.sql`
+
+### No se muestran amenazas
+- Ejecuta el cargador de amenazas: `python loaders/load_threats_waze.py`
+- Si la API de Waze falla, el sistema usará datos de muestra de `amenazas/amenazas_muestra.geojson`
+
+### Error al calcular rutas
+- Verifica que los datos de infraestructura (ways, nodes) estén cargados en la base de datos
+- Asegúrate de que los puntos de inicio y fin estén dentro del área de cobertura de la red
+
+## Mejoras Futuras
+
+Próximas mejoras incluirán:
+- Actualización de rutas en tiempo real basadas en amenazas
+- Visualización de funciones de costo
+- Comparación de múltiples algoritmos de ruteo
+- Exportación de rutas calculadas
+
