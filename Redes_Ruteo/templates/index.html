@@ -38,9 +38,47 @@
         <div class="control-section">
             <h3>Ruteo</h3>
             <p class="instruction-text">Haz clic en el mapa para seleccionar inicio y fin</p>
-            <button id="calculate-route-btn" class="btn" disabled>Calcular Ruta Óptima</button>
-            <button id="clear-route-btn" class="btn btn-secondary">Limpiar Ruta</button>
+            <button id="calculate-route-btn" class="btn" disabled>Calcular Rutas</button>
+            <button id="clear-route-btn" class="btn btn-secondary">Limpiar Rutas</button>
+            
+            <div class="route-selector">
+                <h4>Algoritmos de Ruteo</h4>
+                <div class="checkbox-group">
+                    <label>
+                        <input type="checkbox" id="show-dijkstra-dist" class="route-checkbox" checked>
+                        Dijkstra (Distancia)
+                    </label>
+                    <label>
+                        <input type="checkbox" id="show-dijkstra-prob" class="route-checkbox" checked>
+                        Dijkstra (Probabilidad)
+                    </label>
+                    <label>
+                        <input type="checkbox" id="show-astar-prob" class="route-checkbox" checked>
+                        A* (Probabilidad)
+                    </label>
+                    <label>
+                        <input type="checkbox" id="show-filtered-dijkstra" class="route-checkbox" checked>
+                        Dijkstra Filtrado
+                    </label>
+                </div>
+            </div>
+            
             <div id="route-info"></div>
+        </div>
+        
+        <div class="control-section">
+            <h3>Simulación</h3>
+            <div class="checkbox-group">
+                <label>
+                    <input type="checkbox" id="simulate-failures">
+                    Simular Fallas
+                </label>
+                <label>
+                    <input type="checkbox" id="show-only-active-threats">
+                    Solo Amenazas Activas
+                </label>
+            </div>
+            <div id="simulation-info"></div>
         </div>
         
         <div class="control-section">

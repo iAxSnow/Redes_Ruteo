@@ -9,8 +9,25 @@ let threatsData = null;
 // Routing variables
 let startMarker = null;
 let endMarker = null;
-let routeLayer = null;
+let routeLayers = {
+    dijkstra_dist: null,
+    dijkstra_prob: null,
+    astar_prob: null,
+    filtered_dijkstra: null
+};
 let clickMode = 'start'; // 'start' or 'end'
+
+// Simulation variables
+let failedThreats = [];
+let showOnlyActive = false;
+
+// Route colors
+const routeColors = {
+    dijkstra_dist: '#e74c3c',      // Red
+    dijkstra_prob: '#3498db',      // Blue
+    astar_prob: '#f39c12',         // Orange
+    filtered_dijkstra: '#27ae60'   // Green
+};
 
 // Initialize the map
 function initMap() {
@@ -372,14 +389,14 @@ function calculateRoute() {
     }
     
     const routeInfo = document.getElementById('route-info');
-    routeInfo.innerHTML = '<p>Calculando ruta...</p>';
+    routeInfo.innerHTML = '<p>Calculando rutas...</p>';
     routeInfo.classList.add('visible');
     
     // Get coordinates
     const startLatLng = startMarker.getLatLng();
     const endLatLng = endMarker.getLatLng();
     
-    // Call API
+    // Call API for all algorithms
     fetch('/api/calculate_route', {
         method: 'POST',
         headers: {
@@ -387,58 +404,82 @@ function calculateRoute() {
         },
         body: JSON.stringify({
             start: { lat: startLatLng.lat, lng: startLatLng.lng },
-            end: { lat: endLatLng.lat, lng: endLatLng.lng }
+            end: { lat: endLatLng.lat, lng: endLatLng.lng },
+            algorithm: 'all'
         })
     })
     .then(response => {
         if (!response.ok) {
             return response.json().then(data => {
-                throw new Error(data.error || 'Error al calcular ruta');
+                throw new Error(data.error || 'Error al calcular rutas');
             });
         }
         return response.json();
     })
     .then(data => {
-        // Clear previous route
-        if (routeLayer) {
-            map.removeLayer(routeLayer);
+        // Clear previous routes
+        Object.keys(routeLayers).forEach(key => {
+            if (routeLayers[key]) {
+                map.removeLayer(routeLayers[key]);
+                routeLayers[key] = null;
+            }
+        });
+        
+        // Draw each route on map with different colors
+        let allBounds = [];
+        Object.keys(data).forEach(algorithmKey => {
+            const routeData = data[algorithmKey];
+            if (routeData && routeData.route_geojson) {
+                const checkbox = document.getElementById(`show-${algorithmKey.replace(/_/g, '-')}`);
+                const isVisible = checkbox ? checkbox.checked : true;
+                
+                const layer = L.geoJSON(routeData.route_geojson, {
+                    style: {
+                        color: routeColors[algorithmKey],
+                        weight: 4,
+                        opacity: isVisible ? 0.7 : 0
+                    }
+                });
+                
+                if (isVisible) {
+                    layer.addTo(map);
+                }
+                
+                routeLayers[algorithmKey] = layer;
+                allBounds.push(layer.getBounds());
+            }
+        });
+        
+        // Fit map to all routes
+        if (allBounds.length > 0) {
+            const combinedBounds = allBounds.reduce((acc, bounds) => acc.extend(bounds), allBounds[0]);
+            map.fitBounds(combinedBounds, { padding: [50, 50] });
         }
         
-        // Draw route on map
-        routeLayer = L.geoJSON(data.route_geojson, {
-            style: {
-                color: '#e74c3c',
-                weight: 5,
-                opacity: 0.7
+        // Display route info for all algorithms
+        let routeInfoHtml = '<h4>Resultados de Ruteo</h4>';
+        
+        Object.keys(data).forEach(algorithmKey => {
+            const routeData = data[algorithmKey];
+            if (routeData && routeData.route_geojson) {
+                const lengthKm = (routeData.route_geojson.properties.total_length_m / 1000).toFixed(2);
+                const color = routeColors[algorithmKey];
+                
+                routeInfoHtml += `
+                    <div class="route-metric">
+                        <span class="metric-label" style="color: ${color}">⬤ ${routeData.algorithm}:</span>
+                        <span class="metric-value">${lengthKm} km (${routeData.compute_time_ms.toFixed(2)} ms)</span>
+                    </div>
+                `;
             }
-        }).addTo(map);
+        });
         
-        // Fit map to route bounds
-        map.fitBounds(routeLayer.getBounds(), { padding: [50, 50] });
+        routeInfo.innerHTML = routeInfoHtml;
         
-        // Display route info
-        const lengthKm = (data.route_geojson.properties.total_length_m / 1000).toFixed(2);
-        const timeSeconds = (data.compute_time_ms / 1000).toFixed(3);
-        
-        routeInfo.innerHTML = `
-            <div class="route-metric">
-                <span class="metric-label">Distancia:</span>
-                <span class="metric-value">${lengthKm} km</span>
-            </div>
-            <div class="route-metric">
-                <span class="metric-label">Tiempo de cómputo:</span>
-                <span class="metric-value">${data.compute_time_ms.toFixed(2)} ms</span>
-            </div>
-            <div class="route-metric">
-                <span class="metric-label">Segmentos:</span>
-                <span class="metric-value">${data.route_geojson.properties.segments}</span>
-            </div>
-        `;
-        
-        console.log(`Route calculated: ${lengthKm} km in ${timeSeconds}s`);
+        console.log('Routes calculated successfully');
     })
     .catch(error => {
-        console.error('Error calculating route:', error);
+        console.error('Error calculating routes:', error);
         routeInfo.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
     });
 }
@@ -456,11 +497,13 @@ function clearRoute() {
         endMarker = null;
     }
     
-    // Remove route
-    if (routeLayer) {
-        map.removeLayer(routeLayer);
-        routeLayer = null;
-    }
+    // Remove all routes
+    Object.keys(routeLayers).forEach(key => {
+        if (routeLayers[key]) {
+            map.removeLayer(routeLayers[key]);
+            routeLayers[key] = null;
+        }
+    });
     
     // Reset click mode
     clickMode = 'start';
@@ -474,6 +517,75 @@ function clearRoute() {
     
     // Reset instruction
     document.querySelector('.instruction-text').textContent = 'Haz clic en el mapa para seleccionar inicio y fin';
+}
+
+// Toggle route visibility
+function toggleRouteVisibility(algorithmKey, visible) {
+    const layer = routeLayers[algorithmKey];
+    if (layer) {
+        if (visible) {
+            layer.addTo(map);
+            layer.setStyle({ opacity: 0.7 });
+        } else {
+            map.removeLayer(layer);
+        }
+    }
+}
+
+// Simulate failures
+function simulateFailures() {
+    const simulationInfo = document.getElementById('simulation-info');
+    simulationInfo.innerHTML = '<p>Simulando fallas...</p>';
+    simulationInfo.classList.add('visible');
+    
+    fetch('/api/simulate_failures', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Error al simular fallas');
+        }
+        return response.json();
+    })
+    .then(data => {
+        failedThreats = data.failed_edges || [];
+        
+        simulationInfo.innerHTML = `
+            <div class="route-metric">
+                <span class="metric-label">Elementos fallados:</span>
+                <span class="metric-value">${data.total_failed}</span>
+            </div>
+            <div class="route-metric">
+                <span class="metric-label">Arcos:</span>
+                <span class="metric-value">${data.failed_edges.length}</span>
+            </div>
+            <div class="route-metric">
+                <span class="metric-label">Nodos:</span>
+                <span class="metric-value">${data.failed_nodes.length}</span>
+            </div>
+        `;
+        
+        // Highlight failed threats on map
+        highlightFailedThreats();
+        
+        console.log(`Simulation: ${data.total_failed} elements failed`);
+    })
+    .catch(error => {
+        console.error('Error simulating failures:', error);
+        simulationInfo.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+    });
+}
+
+// Highlight failed threats
+function highlightFailedThreats() {
+    // This would ideally highlight the specific threats that failed
+    // For now, we'll update the display based on the showOnlyActive flag
+    if (showOnlyActive) {
+        displayThreats(threatsData);
+    }
 }
 
 // Event listeners
@@ -495,4 +607,30 @@ document.addEventListener('DOMContentLoaded', function() {
     // Route calculation buttons
     document.getElementById('calculate-route-btn').addEventListener('click', calculateRoute);
     document.getElementById('clear-route-btn').addEventListener('click', clearRoute);
+    
+    // Route visibility checkboxes
+    document.querySelectorAll('.route-checkbox').forEach(checkbox => {
+        checkbox.addEventListener('change', function(e) {
+            const algorithmKey = e.target.id.replace('show-', '').replace(/-/g, '_');
+            toggleRouteVisibility(algorithmKey, e.target.checked);
+        });
+    });
+    
+    // Simulation checkboxes
+    document.getElementById('simulate-failures').addEventListener('change', function(e) {
+        if (e.target.checked) {
+            simulateFailures();
+        } else {
+            // Clear simulation
+            failedThreats = [];
+            const simulationInfo = document.getElementById('simulation-info');
+            simulationInfo.classList.remove('visible');
+            highlightFailedThreats();
+        }
+    });
+    
+    document.getElementById('show-only-active-threats').addEventListener('change', function(e) {
+        showOnlyActive = e.target.checked;
+        displayThreats(threatsData);
+    });
 });

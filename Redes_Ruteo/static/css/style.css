@@ -144,6 +144,38 @@ body {
     font-weight: 500;
 }
 
+/* Route selector */
+.route-selector {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #ecf0f1;
+}
+
+.route-selector h4 {
+    font-size: 14px;
+    margin-bottom: 8px;
+    color: #2c3e50;
+}
+
+/* Simulation info */
+#simulation-info {
+    margin-top: 10px;
+    padding: 10px;
+    background-color: #fff3cd;
+    border-radius: 4px;
+    font-size: 13px;
+    color: #2c3e50;
+    display: none;
+}
+
+#simulation-info.visible {
+    display: block;
+}
+
+#simulation-info p {
+    margin: 5px 0;
+}
+
 /* Checkbox group */
 .checkbox-group {
     margin: 10px 0;
