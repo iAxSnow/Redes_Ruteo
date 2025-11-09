@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Waze fetcher adaptativo:
+- Usa endpoints modernos de Waze (row-rtserver para rest of world)
 - Rota endpoints y usa Referer
 - Si un tile devuelve 404 o error, lo subdivide en 4 (hasta profundidad 2)
 - Permite WAZE_TYPES=alerts|traffic|irregularities (por defecto todos)
@@ -26,11 +27,9 @@ MAX_DEPTH=int(os.getenv("WAZE_MAX_DEPTH","2"))
 TYPES=os.getenv("WAZE_TYPES","alerts,traffic,irregularities")
 
 ENDS=[
-    "https://world-georss.waze.com/rtserver/web/TGeoRSS",
+    "https://www.waze.com/row-rtserver/web/TGeoRSS",
     "https://www.waze.com/rtserver/web/TGeoRSS",
-    "https://us-georss.waze.com/rtserver/web/TGeoRSS",
-    "https://na-georss.waze.com/rtserver/web/TGeoRSS",
-    "https://eu-georss.waze.com/rtserver/web/TGeoRSS"
+    "https://www.waze.com/il-rtserver/web/TGeoRSS"
 ]
 UA={
     "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
