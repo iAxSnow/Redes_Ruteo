@@ -218,6 +218,12 @@ def api_calculate_route():
                 "error": "Missing lat or lng in start or end coordinates"
             }), 400
         
+        # Validate coordinates are not null
+        if start['lat'] is None or start['lng'] is None or end['lat'] is None or end['lng'] is None:
+            return jsonify({
+                "error": "Start or end coordinates cannot be null"
+            }), 400
+        
         start_lat = float(start['lat'])
         start_lng = float(start['lng'])
         end_lat = float(end['lat'])
@@ -236,7 +242,12 @@ def api_calculate_route():
         
         start_node_row = cur.fetchone()
         if not start_node_row:
-            return jsonify({"error": "Could not find start node in network"}), 404
+            cur.close()
+            conn.close()
+            return jsonify({
+                "error": "Could not find start node in network",
+                "details": "No hay nodos de la red cerca del punto de inicio"
+            }), 404
         
         source_node = start_node_row['id']
         
@@ -250,7 +261,12 @@ def api_calculate_route():
         
         end_node_row = cur.fetchone()
         if not end_node_row:
-            return jsonify({"error": "Could not find end node in network"}), 404
+            cur.close()
+            conn.close()
+            return jsonify({
+                "error": "Could not find end node in network",
+                "details": "No hay nodos de la red cerca del punto final"
+            }), 404
         
         target_node = end_node_row['id']
         target_x = end_node_row['x']
@@ -260,124 +276,144 @@ def api_calculate_route():
         
         # Route 1: Dijkstra with distance only
         if algorithm == 'all' or algorithm == 'dijkstra_dist':
-            start_time = time.time()
-            cur.execute("""
-                SELECT 
-                    r.seq, r.node, r.edge, r.cost, r.agg_cost,
-                    w.geom, w.highway, w.length_m
-                FROM pgr_dijkstra(
-                    'SELECT id, source, target, length_m as cost FROM rr.ways',
-                    %s, %s, directed := false
-                ) r
-                LEFT JOIN rr.ways w ON r.edge = w.id
-                ORDER BY r.seq
-            """, (source_node, target_node))
-            route_segments = cur.fetchall()
-            compute_time_ms = (time.time() - start_time) * 1000
-            
-            if route_segments:
-                results['dijkstra_dist'] = {
-                    "route_geojson": build_route_geojson(cur, route_segments),
-                    "compute_time_ms": round(compute_time_ms, 2),
-                    "algorithm": "Dijkstra (Distancia)"
-                }
+            try:
+                start_time = time.time()
+                cur.execute("""
+                    SELECT 
+                        r.seq, r.node, r.edge, r.cost, r.agg_cost,
+                        w.geom, w.highway, w.length_m
+                    FROM pgr_dijkstra(
+                        'SELECT id, source, target, length_m as cost FROM rr.ways',
+                        %s, %s, directed := false
+                    ) r
+                    LEFT JOIN rr.ways w ON r.edge = w.id
+                    ORDER BY r.seq
+                """, (source_node, target_node))
+                route_segments = cur.fetchall()
+                compute_time_ms = (time.time() - start_time) * 1000
+                
+                if route_segments and len(route_segments) > 0:
+                    results['dijkstra_dist'] = {
+                        "route_geojson": build_route_geojson(cur, route_segments),
+                        "compute_time_ms": round(compute_time_ms, 2),
+                        "algorithm": "Dijkstra (Distancia)"
+                    }
+            except Exception as e:
+                app.logger.error(f"Error calculating dijkstra_dist route: {str(e)}")
         
         # Route 2: Dijkstra with probability-weighted cost
         if algorithm == 'all' or algorithm == 'dijkstra_prob':
-            start_time = time.time()
-            cur.execute("""
-                SELECT 
-                    r.seq, r.node, r.edge, r.cost, r.agg_cost,
-                    w.geom, w.highway, w.length_m
-                FROM pgr_dijkstra(
-                    'SELECT id, source, target, 
-                     length_m * (1 + (COALESCE(fail_prob, 0) * 100)) as cost 
-                     FROM rr.ways',
-                    %s, %s, directed := false
-                ) r
-                LEFT JOIN rr.ways w ON r.edge = w.id
-                ORDER BY r.seq
-            """, (source_node, target_node))
-            route_segments = cur.fetchall()
-            compute_time_ms = (time.time() - start_time) * 1000
-            
-            if route_segments:
-                results['dijkstra_prob'] = {
-                    "route_geojson": build_route_geojson(cur, route_segments),
-                    "compute_time_ms": round(compute_time_ms, 2),
-                    "algorithm": "Dijkstra (Probabilidad)"
-                }
+            try:
+                start_time = time.time()
+                cur.execute("""
+                    SELECT 
+                        r.seq, r.node, r.edge, r.cost, r.agg_cost,
+                        w.geom, w.highway, w.length_m
+                    FROM pgr_dijkstra(
+                        'SELECT id, source, target, 
+                         length_m * (1 + (COALESCE(fail_prob, 0) * 100)) as cost 
+                         FROM rr.ways',
+                        %s, %s, directed := false
+                    ) r
+                    LEFT JOIN rr.ways w ON r.edge = w.id
+                    ORDER BY r.seq
+                """, (source_node, target_node))
+                route_segments = cur.fetchall()
+                compute_time_ms = (time.time() - start_time) * 1000
+                
+                if route_segments and len(route_segments) > 0:
+                    results['dijkstra_prob'] = {
+                        "route_geojson": build_route_geojson(cur, route_segments),
+                        "compute_time_ms": round(compute_time_ms, 2),
+                        "algorithm": "Dijkstra (Probabilidad)"
+                    }
+            except Exception as e:
+                app.logger.error(f"Error calculating dijkstra_prob route: {str(e)}")
         
         # Route 3: A* with probability-weighted cost
         if algorithm == 'all' or algorithm == 'astar_prob':
-            start_time = time.time()
-            cur.execute("""
-                SELECT 
-                    r.seq, r.node, r.edge, r.cost, r.agg_cost,
-                    w.geom, w.highway, w.length_m
-                FROM pgr_astar(
-                    'SELECT id, source, target, 
-                     length_m * (1 + (COALESCE(fail_prob, 0) * 100)) as cost,
-                     ST_X(ST_StartPoint(geom)) as x1,
-                     ST_Y(ST_StartPoint(geom)) as y1,
-                     ST_X(ST_EndPoint(geom)) as x2,
-                     ST_Y(ST_EndPoint(geom)) as y2
-                     FROM rr.ways',
-                    %s, %s, directed := false
-                ) r
-                LEFT JOIN rr.ways w ON r.edge = w.id
-                ORDER BY r.seq
-            """, (source_node, target_node))
-            route_segments = cur.fetchall()
-            compute_time_ms = (time.time() - start_time) * 1000
-            
-            if route_segments:
-                results['astar_prob'] = {
-                    "route_geojson": build_route_geojson(cur, route_segments),
-                    "compute_time_ms": round(compute_time_ms, 2),
-                    "algorithm": "A* (Probabilidad)"
-                }
+            try:
+                start_time = time.time()
+                cur.execute("""
+                    SELECT 
+                        r.seq, r.node, r.edge, r.cost, r.agg_cost,
+                        w.geom, w.highway, w.length_m
+                    FROM pgr_astar(
+                        'SELECT id, source, target, 
+                         length_m * (1 + (COALESCE(fail_prob, 0) * 100)) as cost,
+                         ST_X(ST_StartPoint(geom)) as x1,
+                         ST_Y(ST_StartPoint(geom)) as y1,
+                         ST_X(ST_EndPoint(geom)) as x2,
+                         ST_Y(ST_EndPoint(geom)) as y2
+                         FROM rr.ways',
+                        %s, %s, directed := false
+                    ) r
+                    LEFT JOIN rr.ways w ON r.edge = w.id
+                    ORDER BY r.seq
+                """, (source_node, target_node))
+                route_segments = cur.fetchall()
+                compute_time_ms = (time.time() - start_time) * 1000
+                
+                if route_segments and len(route_segments) > 0:
+                    results['astar_prob'] = {
+                        "route_geojson": build_route_geojson(cur, route_segments),
+                        "compute_time_ms": round(compute_time_ms, 2),
+                        "algorithm": "A* (Probabilidad)"
+                    }
+            except Exception as e:
+                app.logger.error(f"Error calculating astar_prob route: {str(e)}")
         
         # Route 4: Filtered Dijkstra (only safe edges with fail_prob < 0.5)
         if algorithm == 'all' or algorithm == 'filtered_dijkstra':
-            start_time = time.time()
-            cur.execute("""
-                SELECT 
-                    r.seq, r.node, r.edge, r.cost, r.agg_cost,
-                    w.geom, w.highway, w.length_m
-                FROM pgr_dijkstra(
-                    'SELECT id, source, target, length_m as cost 
-                     FROM rr.ways 
-                     WHERE COALESCE(fail_prob, 0) < 0.5',
-                    %s, %s, directed := false
-                ) r
-                LEFT JOIN rr.ways w ON r.edge = w.id
-                ORDER BY r.seq
-            """, (source_node, target_node))
-            route_segments = cur.fetchall()
-            compute_time_ms = (time.time() - start_time) * 1000
-            
-            if route_segments:
-                results['filtered_dijkstra'] = {
-                    "route_geojson": build_route_geojson(cur, route_segments),
-                    "compute_time_ms": round(compute_time_ms, 2),
-                    "algorithm": "Dijkstra Filtrado (Solo Seguros)"
-                }
+            try:
+                start_time = time.time()
+                cur.execute("""
+                    SELECT 
+                        r.seq, r.node, r.edge, r.cost, r.agg_cost,
+                        w.geom, w.highway, w.length_m
+                    FROM pgr_dijkstra(
+                        'SELECT id, source, target, length_m as cost 
+                         FROM rr.ways 
+                         WHERE COALESCE(fail_prob, 0) < 0.5',
+                        %s, %s, directed := false
+                    ) r
+                    LEFT JOIN rr.ways w ON r.edge = w.id
+                    ORDER BY r.seq
+                """, (source_node, target_node))
+                route_segments = cur.fetchall()
+                compute_time_ms = (time.time() - start_time) * 1000
+                
+                if route_segments and len(route_segments) > 0:
+                    results['filtered_dijkstra'] = {
+                        "route_geojson": build_route_geojson(cur, route_segments),
+                        "compute_time_ms": round(compute_time_ms, 2),
+                        "algorithm": "Dijkstra Filtrado (Solo Seguros)"
+                    }
+            except Exception as e:
+                app.logger.error(f"Error calculating filtered_dijkstra route: {str(e)}")
         
         cur.close()
         conn.close()
         
         if not results:
             return jsonify({
-                "error": "No routes found between the specified points"
+                "error": "No se pudo calcular ninguna ruta entre los puntos especificados",
+                "details": "Puede que los puntos no estén conectados en la red o no haya rutas disponibles"
             }), 404
         
         return jsonify(results)
     
+    except psycopg2.Error as db_err:
+        app.logger.error(f"Database error calculating route: {str(db_err)}")
+        return jsonify({
+            "error": "Error de base de datos al calcular ruta",
+            "details": str(db_err)
+        }), 500
     except Exception as e:
         app.logger.error(f"Error calculating route: {str(e)}")
         return jsonify({
-            "error": "Failed to calculate route"
+            "error": "No se pudo calcular la ruta",
+            "details": str(e)
         }), 500
 
 
@@ -439,10 +475,17 @@ def api_simulate_failures():
             "total_failed": len(failed_edges) + len(failed_nodes)
         })
     
+    except psycopg2.Error as db_err:
+        app.logger.error(f"Database error simulating failures: {str(db_err)}")
+        return jsonify({
+            "error": "Error de base de datos al simular fallas",
+            "details": str(db_err)
+        }), 500
     except Exception as e:
         app.logger.error(f"Error simulating failures: {str(e)}")
         return jsonify({
-            "error": "Failed to simulate failures"
+            "error": "No se pudo simular fallas",
+            "details": str(e)
         }), 500
 
 

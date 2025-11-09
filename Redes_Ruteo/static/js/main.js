@@ -412,6 +412,12 @@ function calculateRoute() {
         if (!response.ok) {
             return response.json().then(data => {
                 throw new Error(data.error || 'Error al calcular rutas');
+            }).catch(err => {
+                // If response is not JSON, throw generic error
+                if (err instanceof SyntaxError) {
+                    throw new Error('Error al calcular rutas (código: ' + response.status + ')');
+                }
+                throw err;
             });
         }
         return response.json();
@@ -480,7 +486,7 @@ function calculateRoute() {
     })
     .catch(error => {
         console.error('Error calculating routes:', error);
-        routeInfo.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+        routeInfo.innerHTML = `<p style="color: red;"><strong>Error:</strong> ${error.message}</p>`;
     });
 }
 
@@ -546,7 +552,15 @@ function simulateFailures() {
     })
     .then(response => {
         if (!response.ok) {
-            throw new Error('Error al simular fallas');
+            return response.json().then(data => {
+                throw new Error(data.error || 'Error al simular fallas');
+            }).catch(err => {
+                // If response is not JSON, throw generic error
+                if (err instanceof SyntaxError) {
+                    throw new Error('Error al simular fallas (código: ' + response.status + ')');
+                }
+                throw err;
+            });
         }
         return response.json();
     })
@@ -575,7 +589,7 @@ function simulateFailures() {
     })
     .catch(error => {
         console.error('Error simulating failures:', error);
-        simulationInfo.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+        simulationInfo.innerHTML = `<p style="color: red;"><strong>Error:</strong> ${error.message}</p>`;
     });
 }
 

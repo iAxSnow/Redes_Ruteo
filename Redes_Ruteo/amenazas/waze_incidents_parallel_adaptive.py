@@ -28,11 +28,15 @@ TYPES=os.getenv("WAZE_TYPES","alerts,traffic,irregularities")
 ENDS=[
     "https://world-georss.waze.com/rtserver/web/TGeoRSS",
     "https://www.waze.com/rtserver/web/TGeoRSS",
-    "https://us-georss.waze.com/rtserver/web/TGeoRSS"
+    "https://us-georss.waze.com/rtserver/web/TGeoRSS",
+    "https://na-georss.waze.com/rtserver/web/TGeoRSS",
+    "https://eu-georss.waze.com/rtserver/web/TGeoRSS"
 ]
 UA={
-    "User-Agent":"Mozilla/5.0",
-    "Referer":"https://www.waze.com/"
+    "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer":"https://www.waze.com/live-map",
+    "Accept":"application/json, text/plain, */*",
+    "Accept-Language":"es-ES,es;q=0.9,en;q=0.8"
 }
 
 def fetch_box(s,w,n,e)->Dict[str,Any]:
@@ -115,6 +119,15 @@ def dedupe(features):
 def main():
     feats=crawl(BBOX_S,BBOX_W,BBOX_N,BBOX_E,0)
     uniq=dedupe(feats)
+    
+    # Don't overwrite existing file if no features were found
+    if len(uniq) == 0:
+        if OUT.exists():
+            print(f"[WARN] No features fetched. Keeping existing {OUT} to preserve data.")
+            return
+        else:
+            print(f"[WARN] No features fetched and no existing file. Creating empty file.")
+    
     OUT.write_text(json.dumps({"type":"FeatureCollection","features":uniq}, ensure_ascii=False), encoding="utf-8")
     print(f"[OK] saved {OUT} ({len(uniq)} features)")
 
