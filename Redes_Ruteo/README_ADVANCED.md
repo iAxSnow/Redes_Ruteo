@@ -1,110 +1,110 @@
-# Advanced Routing Algorithms and Failure Simulation
+# Algoritmos Avanzados de Ruteo y Simulación de Fallas
 
-## Overview
+## Descripción General
 
-This document describes the advanced routing algorithms and failure simulation features that complete the resilient routing project implementation. These features correspond to points 6, 7, and 8 of the rubric.
+Este documento describe los algoritmos avanzados de ruteo y las características de simulación de fallas que completan la implementación del proyecto de ruteo resiliente. Estas características corresponden a los puntos 6, 7 y 8 de la rúbrica.
 
-## 1. Multiple Routing Algorithms
+## 1. Múltiples Algoritmos de Ruteo
 
-### Implementation
+### Implementación
 
-The `/api/calculate_route` endpoint now supports calculating multiple routes simultaneously using different algorithms. When `algorithm: "all"` is specified, the system calculates 4 different routes.
+El endpoint `/api/calculate_route` ahora soporta el cálculo de múltiples rutas simultáneamente usando diferentes algoritmos. Cuando se especifica `algorithm: "all"`, el sistema calcula 4 rutas diferentes.
 
-### Algorithm Details
+### Detalles de los Algoritmos
 
-#### Algorithm 1: Dijkstra (Distancia)
-**Purpose:** Find the shortest path by distance alone
+#### Algoritmo 1: Dijkstra (Distancia)
+**Propósito:** Encontrar la ruta más corta solo por distancia
 
-**Cost Function:**
+**Función de Costo:**
 ```sql
 cost = length_m
 ```
 
-**Characteristics:**
-- Classic shortest path algorithm
-- Does not consider risk factors
-- Fastest route in terms of distance
-- May pass through high-risk areas
+**Características:**
+- Algoritmo clásico de ruta más corta
+- No considera factores de riesgo
+- Ruta más rápida en términos de distancia
+- Puede pasar por áreas de alto riesgo
 
-**Use Case:** When speed and efficiency are the primary concerns, and risk is acceptable.
+**Caso de Uso:** Cuando la velocidad y eficiencia son las principales preocupaciones, y el riesgo es aceptable.
 
-**Color:** Red (#e74c3c)
+**Color:** Rojo (#e74c3c)
 
-#### Algorithm 2: Dijkstra (Probabilidad)
-**Purpose:** Balance distance and safety by penalizing risky edges
+#### Algoritmo 2: Dijkstra (Probabilidad)
+**Propósito:** Balancear distancia y seguridad penalizando arcos riesgosos
 
-**Cost Function:**
+**Función de Costo:**
 ```sql
 cost = length_m * (1 + fail_prob * 100)
 ```
 
-**Penalization Factor:** 100
-- An edge with `fail_prob = 0.5` has its cost multiplied by 51x
-- Strongly encourages avoiding high-risk areas
-- Still finds connected path if it exists
+**Factor de Penalización:** 100
+- Un arco con `fail_prob = 0.5` tiene su costo multiplicado por 51x
+- Fuertemente incentiva evitar áreas de alto riesgo
+- Aún encuentra un camino conectado si existe
 
-**Characteristics:**
-- Risk-aware routing
-- May choose longer routes to avoid threats
-- Balances distance vs. safety
-- Most practical for general navigation
+**Características:**
+- Ruteo consciente del riesgo
+- Puede elegir rutas más largas para evitar amenazas
+- Balancea distancia vs. seguridad
+- Más práctico para navegación general
 
-**Use Case:** Standard navigation with safety considerations.
+**Caso de Uso:** Navegación estándar con consideraciones de seguridad.
 
-**Color:** Blue (#3498db)
+**Color:** Azul (#3498db)
 
-#### Algorithm 3: A* (Probabilidad)
-**Purpose:** Faster computation using heuristic guidance
+#### Algoritmo 3: A* (Probabilidad)
+**Propósito:** Cálculo más rápido usando guía heurística
 
-**Cost Function:**
+**Función de Costo:**
 ```sql
 cost = length_m * (1 + fail_prob * 100)
-heuristic = euclidean_distance_to_target
+heuristic = distancia_euclidiana_al_objetivo
 ```
 
-**Heuristic Details:**
-- Uses Euclidean distance to goal
-- Guides search toward target
-- Generally faster than pure Dijkstra
-- Same risk penalization as Algorithm 2
+**Detalles de la Heurística:**
+- Usa distancia euclidiana al objetivo
+- Guía la búsqueda hacia el destino
+- Generalmente más rápido que Dijkstra puro
+- Misma penalización de riesgo que Algoritmo 2
 
-**Characteristics:**
-- Informed search algorithm
-- Faster computation (typically 20-40% faster)
-- Similar results to Dijkstra (Probabilidad)
-- Optimized for real-time applications
+**Características:**
+- Algoritmo de búsqueda informada
+- Cálculo más rápido (típicamente 20-40% más rápido)
+- Resultados similares a Dijkstra (Probabilidad)
+- Optimizado para aplicaciones en tiempo real
 
-**Use Case:** Real-time navigation systems requiring fast response.
+**Caso de Uso:** Sistemas de navegación en tiempo real que requieren respuesta rápida.
 
-**Color:** Orange (#f39c12)
+**Color:** Naranja (#f39c12)
 
-#### Algorithm 4: Dijkstra Filtrado (Solo Seguros)
-**Purpose:** Guarantee maximum safety by only using safe edges
+#### Algoritmo 4: Dijkstra Filtrado (Solo Seguros)
+**Propósito:** Garantizar máxima seguridad usando solo arcos seguros
 
-**Cost Function:**
+**Función de Costo:**
 ```sql
 cost = length_m
 WHERE fail_prob < 0.5
 ```
 
-**Edge Filter:**
-- Only considers edges with `fail_prob < 0.5`
-- Completely excludes high-risk segments
-- May result in "no route found" if no safe path exists
+**Filtro de Arcos:**
+- Solo considera arcos con `fail_prob < 0.5`
+- Excluye completamente segmentos de alto riesgo
+- Puede resultar en "ruta no encontrada" si no existe un camino seguro
 
-**Characteristics:**
-- Maximum safety guarantee
-- May be significantly longer than other routes
-- Deterministic safety threshold
-- Suitable for critical applications
+**Características:**
+- Garantía de máxima seguridad
+- Puede ser significativamente más largo que otras rutas
+- Umbral de seguridad determinístico
+- Adecuado para aplicaciones críticas
 
-**Use Case:** Emergency vehicles, critical infrastructure, risk-averse navigation.
+**Caso de Uso:** Vehículos de emergencia, infraestructura crítica, navegación con aversión al riesgo.
 
-**Color:** Green (#27ae60)
+**Color:** Verde (#27ae60)
 
-### API Usage
+### Uso de la API
 
-**Request:**
+**Solicitud:**
 ```json
 POST /api/calculate_route
 {
@@ -120,7 +120,7 @@ POST /api/calculate_route
 }
 ```
 
-**Response:**
+**Respuesta:**
 ```json
 {
   "dijkstra_dist": {
@@ -156,35 +156,35 @@ POST /api/calculate_route
 }
 ```
 
-### Performance Comparison
+### Comparación de Rendimiento
 
-Typical computation times for a 5-10km route:
+Tiempos de cálculo típicos para una ruta de 5-10km:
 
-| Algorithm | Avg Time (ms) | Relative Speed |
-|-----------|---------------|----------------|
-| Dijkstra (Dist) | 40-60 | Baseline |
+| Algoritmo | Tiempo Promedio (ms) | Velocidad Relativa |
+|-----------|---------------------|-------------------|
+| Dijkstra (Dist) | 40-60 | Referencia |
 | Dijkstra (Prob) | 45-70 | +10-15% |
 | A* (Prob) | 30-50 | -20-30% |
-| Filtered | 35-55 | -5-10% |
+| Filtrado | 35-55 | -5-10% |
 
-**Note:** A* is typically fastest due to heuristic guidance. Filtered may be faster due to smaller search space.
+**Nota:** A* es típicamente el más rápido debido a la guía heurística. El filtrado puede ser más rápido debido a un espacio de búsqueda más pequeño.
 
-## 2. Failure Simulation
+## 2. Simulación de Fallas
 
-### Purpose
+### Propósito
 
-Simulate real-world failures in the network based on calculated failure probabilities. This validates the importance of risk-aware routing.
+Simular fallas del mundo real en la red basándose en las probabilidades de falla calculadas. Esto valida la importancia del ruteo consciente del riesgo.
 
-### API Endpoint
+### Endpoint de la API
 
-**Request:**
+**Solicitud:**
 ```json
 POST /api/simulate_failures
 ```
 
-**No body required**
+**Sin cuerpo requerido**
 
-**Response:**
+**Respuesta:**
 ```json
 {
   "failed_edges": [123, 456, 789, ...],
@@ -193,179 +193,179 @@ POST /api/simulate_failures
 }
 ```
 
-### Algorithm
+### Algoritmo
 
 ```python
-for each edge with fail_prob > 0:
-    random_value = random()  # 0.0 to 1.0
-    if random_value < edge.fail_prob:
-        mark_as_failed(edge)
+for cada arco con fail_prob > 0:
+    valor_aleatorio = random()  # 0.0 a 1.0
+    if valor_aleatorio < arco.fail_prob:
+        marcar_como_fallado(arco)
 ```
 
-**Example:**
-- Edge with `fail_prob = 0.3`: 30% chance of failure
-- Edge with `fail_prob = 0.7`: 70% chance of failure
-- Edge with `fail_prob = 0.0`: Never fails
-- Edge with `fail_prob = 1.0`: Always fails
+**Ejemplo:**
+- Arco con `fail_prob = 0.3`: 30% de probabilidad de falla
+- Arco con `fail_prob = 0.7`: 70% de probabilidad de falla
+- Arco con `fail_prob = 0.0`: Nunca falla
+- Arco con `fail_prob = 1.0`: Siempre falla
 
-### Interpretation
+### Interpretación
 
-- **High total_failed:** Network is under significant stress
-- **Failures on main routes:** Demonstrates need for alternatives
-- **No failures on alternative routes:** Validates risk-aware routing
+- **total_failed alto:** La red está bajo estrés significativo
+- **Fallas en rutas principales:** Demuestra la necesidad de alternativas
+- **Sin fallas en rutas alternativas:** Valida el ruteo consciente del riesgo
 
-## 3. User Interface Enhancements
+## 3. Mejoras de la Interfaz de Usuario
 
-### Routing Controls
+### Controles de Ruteo
 
-**Layout:**
+**Diseño:**
 ```
 Ruteo
-├── Instruction text (dynamic feedback)
-├── "Calcular Rutas" button
-├── "Limpiar Rutas" button
-├── Algoritmos de Ruteo (section)
-│   ├── ☑ Dijkstra (Distancia) - Red
-│   ├── ☑ Dijkstra (Probabilidad) - Blue
-│   ├── ☑ A* (Probabilidad) - Orange
-│   └── ☑ Dijkstra Filtrado - Green
-└── Route information panel
+├── Texto de instrucción (retroalimentación dinámica)
+├── Botón "Calcular Rutas"
+├── Botón "Limpiar Rutas"
+├── Algoritmos de Ruteo (sección)
+│   ├── ☑ Dijkstra (Distancia) - Rojo
+│   ├── ☑ Dijkstra (Probabilidad) - Azul
+│   ├── ☑ A* (Probabilidad) - Naranja
+│   └── ☑ Dijkstra Filtrado - Verde
+└── Panel de información de ruta
 ```
 
-**Features:**
-- Individual visibility control for each route
-- Color-coded route information
-- Distance and computation time for each algorithm
-- Real-time visibility toggling
+**Características:**
+- Control de visibilidad individual para cada ruta
+- Información de ruta codificada por colores
+- Distancia y tiempo de cálculo para cada algoritmo
+- Alternancia de visibilidad en tiempo real
 
-### Simulation Controls
+### Controles de Simulación
 
-**Layout:**
+**Diseño:**
 ```
 Simulación
 ├── ☐ Simular Fallas
 ├── ☐ Solo Amenazas Activas
-└── Simulation statistics panel
+└── Panel de estadísticas de simulación
 ```
 
-**Features:**
-- One-click failure simulation
-- Statistics display (total failed, edges, nodes)
-- Filter threats by simulation results
+**Características:**
+- Simulación de fallas con un clic
+- Visualización de estadísticas (total de fallas, arcos, nodos)
+- Filtrar amenazas por resultados de simulación
 
-### Visual Design
+### Diseño Visual
 
-**Route Colors:**
-- 🔴 Red (Dijkstra Distancia): Shortest but potentially risky
-- 🔵 Blue (Dijkstra Probabilidad): Balanced approach
-- 🟠 Orange (A* Probabilidad): Fast and safe
-- 🟢 Green (Dijkstra Filtrado): Maximum safety
+**Colores de Ruta:**
+- 🔴 Rojo (Dijkstra Distancia): Más corta pero potencialmente riesgosa
+- 🔵 Azul (Dijkstra Probabilidad): Enfoque balanceado
+- 🟠 Naranja (A* Probabilidad): Rápido y seguro
+- 🟢 Verde (Dijkstra Filtrado): Máxima seguridad
 
-**Interaction:**
-- All routes calculated with single button click
-- Checkboxes allow comparative analysis
-- Multiple routes can be displayed simultaneously
-- Easy to compare route lengths and paths
+**Interacción:**
+- Todas las rutas calculadas con un solo clic de botón
+- Las casillas de verificación permiten análisis comparativo
+- Múltiples rutas pueden mostrarse simultáneamente
+- Fácil comparar longitudes y caminos de rutas
 
-## 4. Use Case Demonstration
+## 4. Demostración de Caso de Uso
 
-### Scenario: Emergency Vehicle Routing
+### Escenario: Ruteo de Vehículo de Emergencia
 
-**Context:** An ambulance needs to navigate from Hospital A to Emergency Site B.
+**Contexto:** Una ambulancia necesita navegar desde el Hospital A al Sitio de Emergencia B.
 
-#### Step 1: Route Calculation
+#### Paso 1: Cálculo de Ruta
 
-User clicks map to select:
-- Start: Hospital A location
-- End: Emergency Site B location
+El usuario hace clic en el mapa para seleccionar:
+- Inicio: Ubicación del Hospital A
+- Fin: Ubicación del Sitio de Emergencia B
 
-Click "Calcular Rutas" → System calculates 4 routes
+Clic en "Calcular Rutas" → El sistema calcula 4 rutas
 
-#### Step 2: Route Analysis
+#### Paso 2: Análisis de Ruta
 
-**Results:**
+**Resultados:**
 - 🔴 **Dijkstra (Distancia)**: 5.2 km, 45 ms
-  - Shortest distance
-  - Passes through known traffic congestion area
-  - High `fail_prob` on 3 segments
+  - Distancia más corta
+  - Pasa por área conocida de congestión de tráfico
+  - Alto `fail_prob` en 3 segmentos
 
 - 🔵 **Dijkstra (Probabilidad)**: 5.8 km, 52 ms
-  - 11% longer
-  - Avoids high-risk areas
-  - More reliable
+  - 11% más larga
+  - Evita áreas de alto riesgo
+  - Más confiable
 
 - 🟠 **A* (Probabilidad)**: 5.7 km, 39 ms
-  - Similar to Blue route
-  - Faster computation
-  - Good for real-time
+  - Similar a la ruta azul
+  - Cálculo más rápido
+  - Bueno para tiempo real
 
 - 🟢 **Dijkstra Filtrado**: 6.5 km, 42 ms
-  - 25% longer
-  - Uses only "safe" roads
-  - Guaranteed reliability
+  - 25% más larga
+  - Usa solo caminos "seguros"
+  - Confiabilidad garantizada
 
-#### Step 3: Simulation
+#### Paso 3: Simulación
 
-User checks "Simular Fallas"
+El usuario marca "Simular Fallas"
 
-**Simulation Results:**
+**Resultados de Simulación:**
 ```
 Elementos fallados: 5
 Arcos: 3
 Nodos: 2
 ```
 
-**Observation:**
-- One of the failed edges is on the red route (Dijkstra Distancia)
-- None of the alternative routes (blue, orange, green) are affected
-- This validates the importance of risk-aware routing
+**Observación:**
+- Uno de los arcos fallados está en la ruta roja (Dijkstra Distancia)
+- Ninguna de las rutas alternativas (azul, naranja, verde) se ve afectada
+- Esto valida la importancia del ruteo consciente del riesgo
 
-#### Step 4: Decision Making
+#### Paso 4: Toma de Decisiones
 
-**Analysis:**
-- Red route would have been blocked by the failure
-- Blue/Orange routes provide good balance (only 11% longer)
-- Green route provides maximum certainty but at 25% distance cost
+**Análisis:**
+- La ruta roja habría sido bloqueada por la falla
+- Las rutas azul/naranja proporcionan buen balance (solo 11% más largas)
+- La ruta verde proporciona máxima certeza pero a un costo del 25% en distancia
 
-**Decision:**
-- For emergency: Choose Blue or Orange route (balanced)
-- For critical operations: Choose Green route (maximum safety)
-- For time-critical: Accept risk of Red route
+**Decisión:**
+- Para emergencia: Elegir ruta azul o naranja (balanceada)
+- Para operaciones críticas: Elegir ruta verde (máxima seguridad)
+- Para tiempo crítico: Aceptar riesgo de ruta roja
 
-#### Step 5: Validation
+#### Paso 5: Validación
 
-The simulation demonstrates:
-1. **Risk is Real:** Network elements can and do fail
-2. **Shortest ≠ Best:** The shortest route is not always the best
-3. **Alternatives are Valuable:** Having multiple options is critical
-4. **Risk Quantification Works:** The probability model correctly identified risky segments
+La simulación demuestra:
+1. **El Riesgo es Real:** Los elementos de red pueden y fallan
+2. **Más Corta ≠ Mejor:** La ruta más corta no siempre es la mejor
+3. **Las Alternativas son Valiosas:** Tener múltiples opciones es crítico
+4. **La Cuantificación del Riesgo Funciona:** El modelo de probabilidad identificó correctamente segmentos riesgosos
 
-### Business Value
+### Valor de Negocio
 
-**For City Planning:**
-- Identify critical infrastructure vulnerabilities
-- Plan redundant routes
-- Optimize emergency response
+**Para Planificación Urbana:**
+- Identificar vulnerabilidades de infraestructura crítica
+- Planificar rutas redundantes
+- Optimizar respuesta de emergencia
 
-**For Navigation Systems:**
-- Provide risk-aware routing
-- Offer route alternatives
-- Build user trust through reliability
+**Para Sistemas de Navegación:**
+- Proporcionar ruteo consciente del riesgo
+- Ofrecer alternativas de ruta
+- Construir confianza del usuario a través de confiabilidad
 
-**For Emergency Services:**
-- Ensure reliable routing
-- Minimize response time uncertainty
-- Plan for infrastructure failures
+**Para Servicios de Emergencia:**
+- Asegurar ruteo confiable
+- Minimizar incertidumbre en tiempo de respuesta
+- Planificar para fallas de infraestructura
 
-## 5. Technical Implementation Details
+## 5. Detalles de Implementación Técnica
 
-### Database Queries
+### Consultas de Base de Datos
 
 **Dijkstra (Distancia):**
 ```sql
 SELECT * FROM pgr_dijkstra(
   'SELECT id, source, target, length_m as cost FROM rr.ways',
-  source_node, target_node, directed := false
+  nodo_origen, nodo_destino, directed := false
 )
 ```
 
@@ -375,7 +375,7 @@ SELECT * FROM pgr_dijkstra(
   'SELECT id, source, target, 
    length_m * (1 + COALESCE(fail_prob, 0) * 100) as cost 
    FROM rr.ways',
-  source_node, target_node, directed := false
+  nodo_origen, nodo_destino, directed := false
 )
 ```
 
@@ -389,7 +389,7 @@ SELECT * FROM pgr_astar(
    ST_X(ST_EndPoint(geom)) as x2,
    ST_Y(ST_EndPoint(geom)) as y2
    FROM rr.ways',
-  source_node, target_node, directed := false
+  nodo_origen, nodo_destino, directed := false
 )
 ```
 
@@ -399,83 +399,83 @@ SELECT * FROM pgr_dijkstra(
   'SELECT id, source, target, length_m as cost 
    FROM rr.ways 
    WHERE COALESCE(fail_prob, 0) < 0.5',
-  source_node, target_node, directed := false
+  nodo_origen, nodo_destino, directed := false
 )
 ```
 
-### Route Processing
+### Procesamiento de Rutas
 
 ```python
-def build_route_geojson(cur, route_segments):
-    """Build GeoJSON from pgRouting results"""
-    coordinates = []
-    total_length_m = 0
+def build_route_geojson(cur, segmentos_ruta):
+    """Construir GeoJSON desde resultados de pgRouting"""
+    coordenadas = []
+    longitud_total_m = 0
     
-    for segment in route_segments:
-        if segment['geom']:
+    for segmento in segmentos_ruta:
+        if segmento['geom']:
             geom_json = json.loads(
-                cur.execute("SELECT ST_AsGeoJSON(%s)", (segment['geom'],))
+                cur.execute("SELECT ST_AsGeoJSON(%s)", (segmento['geom'],))
             )
-            coordinates.extend(geom_json['coordinates'])
-            total_length_m += float(segment['length_m'])
+            coordenadas.extend(geom_json['coordinates'])
+            longitud_total_m += float(segmento['length_m'])
     
     return {
         "type": "Feature",
         "properties": {
-            "total_length_m": round(total_length_m, 2),
-            "segments": len(route_segments)
+            "total_length_m": round(longitud_total_m, 2),
+            "segments": len(segmentos_ruta)
         },
         "geometry": {
             "type": "LineString",
-            "coordinates": coordinates
+            "coordinates": coordenadas
         }
     }
 ```
 
-## 6. Testing and Validation
+## 6. Pruebas y Validación
 
-### Unit Tests
+### Pruebas Unitarias
 
-Test each algorithm individually:
+Probar cada algoritmo individualmente:
 ```python
 def test_dijkstra_dist():
-    response = calculate_route(start, end, 'dijkstra_dist')
-    assert 'route_geojson' in response
-    assert response['compute_time_ms'] > 0
+    respuesta = calculate_route(inicio, fin, 'dijkstra_dist')
+    assert 'route_geojson' in respuesta
+    assert respuesta['compute_time_ms'] > 0
 
 def test_all_algorithms():
-    response = calculate_route(start, end, 'all')
-    assert len(response) == 4
-    assert 'dijkstra_dist' in response
-    assert 'dijkstra_prob' in response
-    assert 'astar_prob' in response
-    assert 'filtered_dijkstra' in response
+    respuesta = calculate_route(inicio, fin, 'all')
+    assert len(respuesta) == 4
+    assert 'dijkstra_dist' in respuesta
+    assert 'dijkstra_prob' in respuesta
+    assert 'astar_prob' in respuesta
+    assert 'filtered_dijkstra' in respuesta
 ```
 
-### Integration Tests
+### Pruebas de Integración
 
-Test complete workflow:
-1. Calculate all routes
-2. Verify all routes returned
-3. Check route lengths (prob routes should be ≥ dist route)
-4. Validate GeoJSON structure
-5. Confirm computation times
+Probar flujo de trabajo completo:
+1. Calcular todas las rutas
+2. Verificar que todas las rutas fueron devueltas
+3. Verificar longitudes de ruta (rutas prob deben ser ≥ ruta dist)
+4. Validar estructura GeoJSON
+5. Confirmar tiempos de cálculo
 
-### Manual Testing Checklist
+### Lista de Verificación de Pruebas Manuales
 
-- [ ] Can calculate all 4 routes simultaneously
-- [ ] Each route displays with correct color
-- [ ] Checkboxes toggle route visibility
-- [ ] Route information shows correct distances
-- [ ] Simulation executes and returns results
-- [ ] Failed elements are highlighted
-- [ ] "Solo Amenazas Activas" filters correctly
+- [ ] Puede calcular las 4 rutas simultáneamente
+- [ ] Cada ruta se muestra con el color correcto
+- [ ] Las casillas de verificación alternan la visibilidad de la ruta
+- [ ] La información de ruta muestra distancias correctas
+- [ ] La simulación se ejecuta y devuelve resultados
+- [ ] Los elementos fallados se resaltan
+- [ ] "Solo Amenazas Activas" filtra correctamente
 
-## 7. Performance Optimization
+## 7. Optimización de Rendimiento
 
-### Spatial Indexes
+### Índices Espaciales
 
-Ensure these indexes exist:
+Asegurarse de que estos índices existan:
 ```sql
 CREATE INDEX ways_geom_gix ON rr.ways USING GIST (geom);
 CREATE INDEX ways_vertices_geom_gix ON rr.ways_vertices_pgr USING GIST (geom);
@@ -483,88 +483,88 @@ CREATE INDEX ways_source_idx ON rr.ways (source);
 CREATE INDEX ways_target_idx ON rr.ways (target);
 ```
 
-### Query Optimization
+### Optimización de Consultas
 
-- Use `COALESCE(fail_prob, 0)` to handle NULLs
-- Limit search space with bounding boxes when possible
-- Use `directed := false` for bidirectional search
-- Cache frequently requested routes
+- Usar `COALESCE(fail_prob, 0)` para manejar NULLs
+- Limitar espacio de búsqueda con cajas delimitadoras cuando sea posible
+- Usar `directed := false` para búsqueda bidireccional
+- Almacenar en caché rutas solicitadas frecuentemente
 
-### Frontend Optimization
+### Optimización Frontend
 
-- Calculate all routes in single API call
-- Use Leaflet layer groups for efficient rendering
-- Implement debouncing for checkbox changes
-- Lazy load route geometries
+- Calcular todas las rutas en una sola llamada a la API
+- Usar grupos de capas de Leaflet para renderizado eficiente
+- Implementar debouncing para cambios de casillas de verificación
+- Carga perezosa de geometrías de ruta
 
-## 8. Future Enhancements
+## 8. Mejoras Futuras
 
-### Additional Algorithms
-- Yen's K-shortest paths (multiple alternatives)
-- Turn restrictions support
-- Time-dependent routing
-- Multi-modal routing (different vehicle types)
+### Algoritmos Adicionales
+- K-rutas más cortas de Yen (múltiples alternativas)
+- Soporte para restricciones de giro
+- Ruteo dependiente del tiempo
+- Ruteo multimodal (diferentes tipos de vehículos)
 
-### Enhanced Simulation
-- Time-series simulation (multiple time steps)
-- Probability evolution over time
-- Weather-based dynamic probabilities
-- Real-time threat updates via WebSocket
+### Simulación Mejorada
+- Simulación de series temporales (múltiples pasos de tiempo)
+- Evolución de probabilidad a lo largo del tiempo
+- Probabilidades dinámicas basadas en clima
+- Actualizaciones de amenazas en tiempo real vía WebSocket
 
-### Advanced Analytics
-- Route comparison metrics
-- Risk-distance tradeoff visualization
-- Historical reliability analysis
-- Predictive failure modeling
+### Analítica Avanzada
+- Métricas de comparación de rutas
+- Visualización de compensación riesgo-distancia
+- Análisis histórico de confiabilidad
+- Modelado predictivo de fallas
 
-## 9. Troubleshooting
+## 9. Solución de Problemas
 
-### No Route Found
+### Ruta No Encontrada
 
-**Problem:** One or more algorithms return no route
+**Problema:** Uno o más algoritmos no devuelven ruta
 
-**Possible Causes:**
-- Filtered Dijkstra: No path with all edges `fail_prob < 0.5`
-- Network disconnected
-- Start/end nodes in different connected components
+**Causas Posibles:**
+- Dijkstra Filtrado: No hay camino con todos los arcos `fail_prob < 0.5`
+- Red desconectada
+- Nodos de inicio/fin en diferentes componentes conectados
 
-**Solution:**
-- Check network connectivity
-- Adjust filter threshold
-- Use probability-based routes instead
+**Solución:**
+- Verificar conectividad de la red
+- Ajustar umbral de filtro
+- Usar rutas basadas en probabilidad en su lugar
 
-### Slow Computation
+### Cálculo Lento
 
-**Problem:** Route calculation takes > 5 seconds
+**Problema:** El cálculo de ruta toma > 5 segundos
 
-**Possible Causes:**
-- Large network (>100k edges)
-- Missing spatial indexes
-- No search space optimization
+**Causas Posibles:**
+- Red grande (>100k arcos)
+- Faltan índices espaciales
+- Sin optimización de espacio de búsqueda
 
-**Solutions:**
-- Add/rebuild spatial indexes
-- Implement bounding box pre-filtering
-- Use A* instead of Dijkstra
-- Consider caching
+**Soluciones:**
+- Agregar/reconstruir índices espaciales
+- Implementar pre-filtrado de caja delimitadora
+- Usar A* en lugar de Dijkstra
+- Considerar almacenamiento en caché
 
-### Routes Identical
+### Rutas Idénticas
 
-**Problem:** All algorithms return same route
+**Problema:** Todos los algoritmos devuelven la misma ruta
 
-**Possible Causes:**
-- All `fail_prob` values are 0
-- Penalty factor too small
-- Only one viable route exists
+**Causas Posibles:**
+- Todos los valores `fail_prob` son 0
+- Factor de penalización demasiado pequeño
+- Solo existe una ruta viable
 
-**Solutions:**
-- Run probability model script
-- Increase penalty factor (currently 100)
-- Verify threat data loaded
+**Soluciones:**
+- Ejecutar script de modelo de probabilidad
+- Aumentar factor de penalización (actualmente 100)
+- Verificar que los datos de amenazas estén cargados
 
-## 10. References
+## 10. Referencias
 
-- pgRouting Documentation: https://docs.pgrouting.org/
-- Dijkstra's Algorithm: https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm
-- A* Search Algorithm: https://en.wikipedia.org/wiki/A*_search_algorithm
-- PostGIS Functions: https://postgis.net/docs/reference.html
+- Documentación de pgRouting: https://docs.pgrouting.org/
+- Algoritmo de Dijkstra: https://es.wikipedia.org/wiki/Algoritmo_de_Dijkstra
+- Algoritmo de Búsqueda A*: https://es.wikipedia.org/wiki/Algoritmo_de_b%C3%BAsqueda_A*
+- Funciones de PostGIS: https://postgis.net/docs/reference.html
