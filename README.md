@@ -96,6 +96,7 @@ Para producción, necesitas **datos reales de Waze**. El sistema tiene una estra
 # 1. Instalar Firefox y GeckoDriver
 sudo apt-get update
 sudo apt-get install -y firefox firefox-geckodriver
+# O si usas Firefox ESR: sudo apt-get install -y firefox-esr firefox-geckodriver
 
 # 2. Instalar Selenium
 pip install selenium

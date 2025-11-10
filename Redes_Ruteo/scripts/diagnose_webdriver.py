@@ -26,7 +26,9 @@ def check_chrome_installed():
     
     commands = [
         ("firefox --version", "Firefox"),
+        ("firefox-esr --version", "Firefox ESR"),
         ("/usr/bin/firefox --version", "Firefox (path)"),
+        ("/usr/bin/firefox-esr --version", "Firefox ESR (path)"),
         ("snap run firefox --version 2>/dev/null", "Firefox (snap)"),
     ]
     
@@ -47,6 +49,8 @@ def check_chrome_installed():
         print("\nSOLUCIÓN:")
         print("  sudo apt-get update")
         print("  sudo apt-get install -y firefox")
+        print("\nAlternativamente, puedes usar Firefox ESR:")
+        print("  sudo apt-get install -y firefox-esr")
         return False
     
     print("\n✓ Firefox está instalado correctamente")

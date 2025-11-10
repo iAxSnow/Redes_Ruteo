@@ -154,6 +154,29 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
         firefox_options.set_preference('permissions.default.image', 2)  # Disable images for faster loading
         firefox_options.set_preference('dom.webnotifications.enabled', False)  # Disable notifications
         
+        # Auto-detect Firefox binary location (support firefox and firefox-esr)
+        firefox_paths = [
+            '/usr/bin/firefox',
+            '/usr/bin/firefox-esr',
+            'firefox',
+            'firefox-esr'
+        ]
+        
+        firefox_binary = None
+        for path in firefox_paths:
+            try:
+                import subprocess
+                result = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=2)
+                if result.returncode == 0:
+                    firefox_binary = path
+                    sys.stderr.write(f"[info] Found Firefox at: {path}\n")
+                    break
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+        
+        if firefox_binary:
+            firefox_options.binary_location = firefox_binary
+        
         sys.stderr.write(f"[info] Starting Firefox WebDriver for tile {s:.4f},{w:.4f},{n:.4f},{e:.4f}\n")
         
         # Initialize Firefox WebDriver with better error handling
@@ -169,6 +192,7 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
             elif "Firefox" in error_msg or "firefox" in error_msg.lower():
                 sys.stderr.write(f"[ERROR] Firefox not properly installed or can't start.\n")
                 sys.stderr.write(f"[ERROR] Install Firefox: sudo apt-get install firefox\n")
+                sys.stderr.write(f"[ERROR] Or Firefox ESR: sudo apt-get install firefox-esr\n")
             else:
                 sys.stderr.write(f"[ERROR] WebDriver session error: {error_msg}\n")
             raise RuntimeError(f"Firefox not available or misconfigured. Using fallback data.")

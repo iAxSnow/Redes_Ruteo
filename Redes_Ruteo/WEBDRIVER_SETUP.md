@@ -7,7 +7,7 @@
 El script de recolección de Waze (`amenazas/waze_incidents_parallel_adaptive.py`) usa una estrategia de 3 niveles:
 
 1. **APIs de Waze** (intenta primero, pero a menudo falla)
-2. **WebDriver con Selenium** ← **MÉTODO RECOMENDADO PARA DATOS REALES**
+2. **WebDriver con Selenium (Firefox)** ← **MÉTODO RECOMENDADO PARA DATOS REALES**
 3. **Datos de muestra** (solo fallback para desarrollo)
 
 ## Diagnóstico Rápido
@@ -25,8 +25,8 @@ Este script te dirá exactamente qué falta y cómo arreglarlo.
 Para usar WebDriver necesitas:
 
 1. **Selenium** (ya incluido en requirements.txt)
-2. **Chrome/Chromium** instalado en el sistema
-3. **ChromeDriver** compatible con tu versión de Chrome
+2. **Firefox o Firefox ESR** instalado en el sistema
+3. **GeckoDriver** compatible con tu versión de Firefox
 
 ## Instalación
 
@@ -36,306 +36,164 @@ Para usar WebDriver necesitas:
 pip install -r requirements.txt
 ```
 
-### 2. Instalar Chrome/Chromium
+### 2. Instalar Firefox y GeckoDriver
 
 #### Ubuntu/Debian
 
-**⚠️ IMPORTANTE**: Ubuntu 24.04+ puede instalar Chromium como snap por defecto. Para mejor compatibilidad, recomendamos desinstalar snap y usar el paquete tradicional:
+**Opción 1: Firefox estándar** (recomendado para versiones recientes de Ubuntu)
 
 ```bash
-# Verificar si chromium está instalado como snap
-snap list chromium
-
-# Si está instalado como snap, desinstalarlo
-sudo snap remove chromium
-
-# Instalar desde repositorios Ubuntu (método recomendado)
 sudo apt-get update
-sudo apt-get install -y chromium-browser chromium-chromedriver
+sudo apt-get install -y firefox firefox-geckodriver
 ```
 
-**Si prefieres usar Snap** (puede requerir configuración adicional):
+**Opción 2: Firefox ESR** (Extended Support Release - común en Debian y contenedores)
+
 ```bash
-sudo snap install chromium
-
-# Crear enlaces simbólicos para compatibilidad
-sudo ln -s /snap/bin/chromium /usr/local/bin/chromium-browser
-sudo ln -s /snap/bin/chromium.chromedriver /usr/local/bin/chromedriver
-
-# Agregar /snap/bin a PATH si no está
-export PATH=/snap/bin:$PATH
+sudo apt-get update
+sudo apt-get install -y firefox-esr firefox-geckodriver
 ```
 
-#### Fedora/RHEL
-```bash
-sudo dnf install -y chromium chromium-chromedriver
-```
+**Nota**: El sistema detecta automáticamente si tienes `firefox` o `firefox-esr` instalado y usa el que encuentre.
 
 #### macOS
+
 ```bash
-brew install --cask google-chrome
-brew install chromedriver
+# Instalar Firefox
+brew install --cask firefox
+
+# Instalar GeckoDriver
+brew install geckodriver
 ```
 
 #### Windows
-Descarga e instala Chrome desde: https://www.google.com/chrome/
 
-### 3. Instalar ChromeDriver
+1. Descarga Firefox desde https://www.mozilla.org/firefox/
+2. Descarga GeckoDriver desde https://github.com/mozilla/geckodriver/releases
+3. Extrae geckodriver.exe y agrégalo al PATH del sistema
 
-#### Opción A: Instalación Automática (Recomendado)
-Selenium 4.x+ puede descargar ChromeDriver automáticamente.
-
-#### Opción B: Instalación Manual
-
-1. Verifica tu versión de Chrome:
-   - Abre Chrome → Menú (⋮) → Ayuda → Información de Google Chrome
-   
-2. Descarga ChromeDriver compatible:
-   - https://chromedriver.chromium.org/downloads
-   
-3. Extrae y mueve a una ubicación en tu PATH:
-   ```bash
-   # Linux/macOS
-   sudo mv chromedriver /usr/local/bin/
-   sudo chmod +x /usr/local/bin/chromedriver
-   
-   # Windows
-   # Mueve chromedriver.exe a C:\Windows\System32\ o añade a PATH
-   ```
-
-## Verificación
-
-### Método 1: Script de Diagnóstico (Recomendado)
-
-Usa el script de diagnóstico automático:
+### 3. Verificar Instalación
 
 ```bash
+# Verificar Firefox
+firefox --version
+# O si tienes Firefox ESR:
+firefox-esr --version
+
+# Verificar GeckoDriver
+geckodriver --version
+
+# Ejecutar diagnóstico completo
 python scripts/diagnose_webdriver.py
 ```
 
-Este script verifica:
-- ✓ Chrome/Chromium instalado
-- ✓ ChromeDriver instalado
-- ✓ Selenium instalado
-- ✓ WebDriver puede iniciar
-- ✓ Navegación funciona
-
-**Si algo falla, el script te dirá exactamente cómo arreglarlo.**
-
-### Método 2: Prueba Manual
-
-Prueba que WebDriver funciona:
-
-```python
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-
-options = Options()
-options.add_argument('--headless')
-options.add_argument('--no-sandbox')
-options.add_argument('--disable-dev-shm-usage')
-
-driver = webdriver.Chrome(options=options)
-driver.get('https://www.waze.com')
-print(driver.title)
-driver.quit()
-```
-
-Si esto funciona sin errores, WebDriver está configurado correctamente.
+Si el diagnóstico muestra ✅ en todos los checks, estás listo para recolectar datos reales.
 
 ## Uso
 
-El script usará automáticamente WebDriver cuando:
-1. Las APIs de Waze fallen (404, timeout, etc.)
-2. Selenium esté instalado
-3. Chrome/ChromeDriver estén disponibles
+### Recolectar Datos Reales de Waze
 
-### Estrategia de Fallback de 3 Niveles
+```bash
+python amenazas/waze_incidents_parallel_adaptive.py
+```
 
-1. **API Endpoints** (preferido, más rápido)
-   - Intenta múltiples endpoints de Waze
-   
-2. **WebDriver Scraping** (respaldo confiable)
-   - Usa Chrome headless para contenido dinámico
-   - Extrae datos de objetos JavaScript en la página
-   
-3. **Sample Data** (fallback final)
-   - Usa `amenazas_muestra.geojson`
-   - Garantiza que el sistema siempre tenga datos
+**Identificar si estás usando datos reales**:
+- ✅ Datos reales: `[info] Firefox WebDriver started successfully` → `[ok] WebDriver extracted X alerts, Y jams`
+- ❌ Datos de muestra: `[OK] Using sample data from amenazas_muestra.geojson`
+
+### Verificar Datos Recolectados
+
+```bash
+# Ver estadísticas del archivo generado
+python -c "import json; data=json.load(open('amenazas/waze_incidents.geojson')); print(f'Alerts: {len([f for f in data[\"features\"] if f[\"properties\"][\"type\"] == \"alert\"])}, Jams: {len([f for f in data[\"features\"] if f[\"properties\"][\"type\"] == \"jam\"])}')"
+```
 
 ## Troubleshooting
 
-### Error: "Chrome instance exited" o "session not created" con instalación Snap
+### Firefox no detectado (pero está instalado)
 
-**Síntoma**: El diagnóstico muestra que Chromium está instalado pero no puede ejecutarse.
+Si el diagnóstico dice "Firefox no está instalado" pero tienes Firefox ESR:
 
-**Causa**: Chromium está instalado como snap (Ubuntu 24.04+) y no es accesible desde Python.
-
-**Solución (Opción 1 - Recomendada)**: Usar paquetes tradicionales:
 ```bash
-# Desinstalar snap
-sudo snap remove chromium
-
-# Instalar paquetes tradicionales
-sudo apt-get update
-sudo apt-get install -y chromium-browser chromium-chromedriver
-
-# Verificar
-python scripts/diagnose_webdriver.py
+# Verificar que firefox-esr está instalado
+which firefox-esr
+firefox-esr --version
 ```
 
-**Solución (Opción 2)**: Configurar snap para que funcione:
-```bash
-# Crear enlaces simbólicos
-sudo ln -sf /snap/bin/chromium /usr/local/bin/chromium-browser
-sudo ln -sf /snap/bin/chromium.chromedriver /usr/local/bin/chromedriver
+El sistema detecta automáticamente `firefox-esr` desde la versión más reciente del código.
 
-# Agregar a PATH
-export PATH=/snap/bin:$PATH
-echo 'export PATH=/snap/bin:$PATH' >> ~/.bashrc
+### GeckoDriver no encontrado
 
-# Verificar
-chromedriver --version
-chromium-browser --version
-```
-
-### Error: "Chrome instance exited" o "session not created" (general)
-**Causa**: Chrome/Chromium no está instalado o no puede iniciar.
-
-**Solución**:
 ```bash
 # Ubuntu/Debian
-sudo apt-get update
-sudo apt-get install -y chromium-browser chromium-chromedriver
+sudo apt-get install -y firefox-geckodriver
 
 # Verificar instalación
-chromium-browser --version
-chromedriver --version
-
-# Si los comandos no funcionan, puede que necesites:
-which chromium-browser  # Buscar ubicación de Chrome
-which chromedriver      # Buscar ubicación de ChromeDriver
+which geckodriver
+geckodriver --version
 ```
 
-**Alternativa**: El sistema automáticamente usará datos de muestra si WebDriver falla. No es necesario arreglarlo para usar el sistema.
+### Error "Firefox WebDriver failed"
 
-### Error: "WebDriver executable not found"
-**Solución**: Instala ChromeDriver o añádelo a tu PATH
+Causas comunes:
+1. **GeckoDriver no compatible**: Asegúrate que GeckoDriver es compatible con tu versión de Firefox
+2. **Firefox no puede ejecutarse en headless**: Algunos entornos (como contenedores) requieren configuración adicional
+3. **Permisos**: El usuario debe tener permisos para ejecutar Firefox
+
+**Solución para contenedores**:
 ```bash
-# Debian/Ubuntu
-sudo apt-get install chromium-chromedriver
-
-# O descarga manualmente desde:
-# https://chromedriver.chromium.org/downloads
+# Instalar dependencias adicionales para Firefox en contenedores
+sudo apt-get install -y libgtk-3-0 libdbus-glib-1-2 libxt6 libx11-xcb1
 ```
 
-### Error: "Chrome binary not found"
-**Solución**: Instala Chrome/Chromium
-```bash
-# Ubuntu/Debian
-sudo apt-get install chromium-browser
+### WebDriver tarda mucho
 
-# Fedora
-sudo dnf install chromium
-
-# macOS
-brew install --cask google-chrome
-```
-
-### Error: "Chrome version mismatch"
-**Solución**: Actualiza Chrome y ChromeDriver a versiones compatibles
-```bash
-# Ubuntu: actualizar ambos
-sudo apt-get update
-sudo apt-get upgrade chromium-browser chromium-chromedriver
-```
-
-### WebDriver es muy lento
-**Solución**: 
-- Reduce `WAZE_RETRIES` en .env (default: 2)
-- Usa `WAZE_SIMULATE=true` para testing
-- El sistema automáticamente usará sample data si WebDriver toma demasiado tiempo
-
-### "El sistema funciona pero no recoge datos de Waze en tiempo real"
-
-**🔴 IMPORTANTE**: Si ves este mensaje en los logs:
-```
-[OK] Using sample data from amenazas_muestra.geojson
-```
-
-**Esto significa que NO estás recolectando datos reales**. Causas comunes:
-- Chrome/ChromeDriver no están instalados
-- Chrome/ChromeDriver tienen versiones incompatibles
-- APIs de Waze están caídas Y WebDriver falla
-
-**Para PRODUCCIÓN, DEBES arreglar WebDriver**. Los datos de muestra son solo para desarrollo/testing.
-
-**Acción requerida**:
-1. Ejecuta: `python scripts/diagnose_webdriver.py`
-2. Sigue las soluciones indicadas
-3. Verifica que el diagnóstico pase todos los checks
-4. Ejecuta nuevamente el script de Waze
-
-### "Quiero solo desarrollo/testing (sin datos reales)"
-
-Si solo necesitas probar el sistema sin datos reales:
-- El sistema automáticamente usará sample data si WebDriver falla
-- Puedes usar `WAZE_SIMULATE=true` en .env para generar datos simulados
-- Esto es SOLO para desarrollo, NO para producción
-
-## Variables de Entorno
-
-```bash
-# .env
-WAZE_TIMEOUT=30        # Timeout para cada request (segundos)
-WAZE_RETRIES=2         # Intentos antes de usar WebDriver
-WAZE_MAX_DEPTH=2       # Profundidad de subdivisión de tiles
-WAZE_SIMULATE=false    # true para usar datos simulados
-```
-
-## Modo Sin WebDriver
-
-Si no quieres instalar WebDriver, el script funcionará con sample data:
-
-1. No instales selenium (o desinstálalo)
-2. El script automáticamente saltará el paso de WebDriver
-3. Usará `amenazas_muestra.geojson` como datos de respaldo
-
-## Logs
-
-El script muestra el progreso:
+Firefox WebDriver puede tardar 10-30 segundos en iniciar y cargar la página de Waze. Esto es normal. El script muestra mensajes de progreso:
 
 ```
 [info] API endpoints failed, trying WebDriver scraping...
-[info] Starting WebDriver for tile -33.8000,-70.9500,-33.2000,-70.4500
-[ok] WebDriver extracted 5 alerts, 3 jams
+[info] Found Firefox at: /usr/bin/firefox-esr
+[info] Starting Firefox WebDriver for tile ...
+[info] Firefox WebDriver started successfully
+[ok] WebDriver extracted 45 alerts, 23 jams
 ```
 
-O si falla:
+### Modo de Desarrollo sin WebDriver
 
+Si solo estás desarrollando y no necesitas datos reales, el sistema usa automáticamente datos de muestra sin necesidad de instalar Firefox/GeckoDriver:
+
+```bash
+# Esto funciona sin WebDriver
+python amenazas/waze_incidents_parallel_adaptive.py
+
+# Verás:
+# [info] API endpoints failed, trying WebDriver scraping...
+# [info] WebDriver not available. Using fallback data.
+# [OK] Using sample data from amenazas_muestra.geojson
 ```
-[warn] WebDriver also failed: Browser automation failed (WebDriver): ...
-[info] Using sample data as final fallback
+
+## Verificación Final
+
+Ejecuta estos comandos para confirmar que todo funciona:
+
+```bash
+# 1. Diagnóstico completo
+python scripts/diagnose_webdriver.py
+
+# 2. Si el diagnóstico pasa, recolectar datos
+python amenazas/waze_incidents_parallel_adaptive.py
+
+# 3. Verificar que se recolectaron datos reales (no muestra)
+grep -i "webdriver extracted" amenazas/waze_incidents.geojson
 ```
 
-## Producción
+Si ves "WebDriver extracted X alerts", ¡estás recolectando datos reales! 🎉
 
-Para entornos de producción:
+## Soporte
 
-1. **Docker**: Incluye Chrome en tu Dockerfile
-   ```dockerfile
-   RUN apt-get update && apt-get install -y \
-       chromium-browser \
-       chromium-chromedriver
-   ```
+Si tienes problemas:
 
-2. **Cron Jobs**: Asegúrate que DISPLAY esté configurado para headless
-   ```bash
-   DISPLAY=:99 python amenazas/waze_incidents_parallel_adaptive.py
-   ```
-
-3. **CI/CD**: Usa imágenes con Chrome preinstalado
-   ```yaml
-   # GitHub Actions example
-   - uses: browser-actions/setup-chrome@latest
-   ```
+1. Ejecuta `python scripts/diagnose_webdriver.py` y copia el output completo
+2. Verifica qué versión de Firefox/Firefox ESR tienes: `firefox --version` o `firefox-esr --version`
+3. Verifica qué versión de GeckoDriver tienes: `geckodriver --version`
+4. Incluye esta información cuando reportes el problema
