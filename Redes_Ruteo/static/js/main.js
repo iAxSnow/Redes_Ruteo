@@ -147,6 +147,25 @@ function displayThreats(data) {
         return;
     }
     
+    // Count threats by type for debugging
+    const counts = {
+        waze: 0,
+        traffic_calming: 0,
+        weather: 0,
+        other: 0
+    };
+    
+    data.features.forEach(feature => {
+        const source = feature.properties.source;
+        if (counts[source] !== undefined) {
+            counts[source]++;
+        } else {
+            counts.other++;
+        }
+    });
+    
+    console.log(`Displaying threats - Total: ${data.features.length}, Waze: ${counts.waze}, Traffic Calming: ${counts.traffic_calming}, Weather: ${counts.weather}, Other: ${counts.other}`);
+    
     // Add GeoJSON layer with custom styling
     L.geoJSON(data, {
         pointToLayer: function(feature, latlng) {
@@ -179,23 +198,24 @@ function createThreatMarker(feature, latlng) {
     // Determine color and size based on threat type and severity
     if (props.source === 'waze') {
         if (props.subtype === 'CLOSURE') {
-            color = '#d73027';
+            color = '#d73027';  // Red for closures
             radius = 6;
         } else if (props.subtype === 'TRAFFIC_JAM') {
-            color = '#fc8d59';
+            color = '#fc8d59';  // Orange for traffic jams
             radius = 5;
         } else {
-            color = '#fee090';
+            color = '#fee090';  // Yellow for other incidents
             radius = 4;
         }
     } else if (props.source === 'traffic_calming') {
-        color = '#4575b4';
-        radius = 5;
+        // Make traffic calming more visible with blue color and larger size
+        color = '#4575b4';  // Blue for traffic calming (speed reducers)
+        radius = 6;  // Increased from 5 to make more visible
     } else if (props.source === 'weather') {
-        color = '#91bfdb';
+        color = '#91bfdb';  // Light blue for weather
         radius = 8;
     } else {
-        color = '#999999';
+        color = '#999999';  // Gray for unknown
         radius = 4;
     }
     
@@ -203,9 +223,9 @@ function createThreatMarker(feature, latlng) {
         radius: radius,
         fillColor: color,
         color: color,
-        weight: 1,
+        weight: 2,  // Increased border weight for better visibility
         opacity: 1,
-        fillOpacity: 0.7
+        fillOpacity: 0.8  // Increased from 0.7 for better visibility
     });
 }
 
@@ -317,9 +337,13 @@ function updateStats(data) {
 
 // Toggle threats visibility
 function toggleThreats(show) {
+    console.log(`Toggle threats visibility: ${show ? 'showing' : 'hiding'} all threats`);
     if (show) {
         if (threatsData) {
+            // Display ALL threats including Waze, Traffic Calming, and Weather
             displayThreats(threatsData);
+        } else {
+            console.log('No threats data loaded yet');
         }
     } else {
         threatsLayer.clearLayers();
