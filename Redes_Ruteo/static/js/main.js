@@ -67,15 +67,20 @@ function getUserLocation() {
             const lat = position.coords.latitude;
             const lng = position.coords.longitude;
             
-            // Remove previous marker if exists
+            // Remove previous user marker if exists
             if (userMarker) {
                 map.removeLayer(userMarker);
             }
             
-            // Add marker for user location
-            userMarker = L.marker([lat, lng], {
+            // Remove previous start marker if exists (we'll replace it with user location)
+            if (startMarker) {
+                map.removeLayer(startMarker);
+            }
+            
+            // Set user location as start point for routing
+            startMarker = L.marker([lat, lng], {
                 icon: L.icon({
-                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
+                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
                     shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
                     iconSize: [25, 41],
                     iconAnchor: [12, 41],
@@ -84,7 +89,13 @@ function getUserLocation() {
                 })
             }).addTo(map);
             
-            userMarker.bindPopup('<b>Mi Ubicación</b>').openPopup();
+            startMarker.bindPopup('<b>Mi Ubicación (Inicio)</b>').openPopup();
+            
+            // Set click mode to 'end' so next click sets the destination
+            clickMode = 'end';
+            
+            // Update instruction text
+            document.querySelector('.instruction-text').textContent = 'Haz clic en el mapa para seleccionar el punto final';
             
             // Center map on user location
             map.setView([lat, lng], 14);
@@ -93,7 +104,10 @@ function getUserLocation() {
             locationInfo.innerHTML = `
                 <p><strong>Latitud:</strong> ${lat.toFixed(6)}</p>
                 <p><strong>Longitud:</strong> ${lng.toFixed(6)}</p>
+                <p style="color: green;"><strong>✓ Establecido como punto de inicio</strong></p>
             `;
+            
+            console.log(`User location set as start point: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
         },
         (error) => {
             let errorMsg = 'Error desconocido';
