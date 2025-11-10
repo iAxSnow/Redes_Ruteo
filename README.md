@@ -84,8 +84,12 @@ python loaders/load_ways_nodes.py
 **Nota**: Las amenazas son opcionales. El sistema puede calcular rutas basadas solo en distancia sin necesidad de cargar amenazas. Las amenazas permiten calcular rutas considerando probabilidades de falla.
 
 ```bash
-# Extraer amenazas de Waze (usa datos de muestra si la API falla)
+# Extraer amenazas de Waze
+# Usa API → WebDriver (si disponible) → datos de muestra como fallback
 python amenazas/waze_incidents_parallel_adaptive.py
+
+# Para habilitar WebDriver: pip install selenium
+# Ver WEBDRIVER_SETUP.md para instrucciones completas
 
 # Cargar amenazas en base de datos
 python loaders/load_threats_waze.py
