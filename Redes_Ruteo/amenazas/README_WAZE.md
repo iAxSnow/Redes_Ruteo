@@ -113,11 +113,19 @@ The new browser automation feature provides a robust solution for accessing the 
 
 ### Features
 - **Headless mode**: Runs without visible browser window
+- **Anti-detection measures**: Custom User-Agent and disabled automation flags to avoid blocking
 - **Popup handling**: Automatically closes cookie banners, consent dialogs, and modals
 - **Multi-language support**: Handles buttons in English, Spanish, and other languages
 - **Smart data extraction**: Multiple JavaScript extraction strategies to find incident data
 - **Automatic retries**: Retries with different strategies if initial extraction fails
 - **Bounding box filtering**: Only returns incidents within the specified geographic area
+
+### Anti-Detection Configuration
+To avoid being blocked as a bot, the implementation:
+1. **Custom User-Agent**: Uses Chrome User-Agent (`Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36`)
+2. **Disabled automation flags**: Sets `dom.webdriver.enabled=false` and `useAutomationExtension=false`
+3. **Natural headers**: Includes Referer, Accept-Language, and Origin headers
+4. **Timing**: Adds realistic delays between actions (2-5 seconds)
 
 ### Popup Detection Strategies
 The script tries to close popups using:

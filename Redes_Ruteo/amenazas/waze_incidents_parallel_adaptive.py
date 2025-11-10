@@ -123,6 +123,9 @@ def fetch_from_live_map(s,w,n,e)->Dict[str,Any]:
     firefox_options.set_preference("dom.webdriver.enabled", False)
     firefox_options.set_preference("useAutomationExtension", False)
     
+    # Set custom User-Agent to avoid automation detection
+    firefox_options.set_preference("general.useragent.override", UA["User-Agent"])
+    
     # Set display if not already set (for headless environments)
     if "DISPLAY" not in os.environ:
         os.environ["DISPLAY"] = ":99"
