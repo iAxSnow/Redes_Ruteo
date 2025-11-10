@@ -3,10 +3,11 @@
 """
 Waze fetcher adaptativo:
 - Usa la API moderna de Waze Live Map (tile-based system)
-- Si las APIs fallan, intenta scraping del live map webpage
+- Si las APIs fallan, intenta scraping del live map webpage usando Selenium
 - Sistema de tiles basado en zoom levels
 - Si un tile devuelve 404 o error, lo subdivide en 4 (hasta profundidad 2)
 - Extrae alerts, jams e irregularities
+- Maneja popups y modales automáticamente
 
 Salida: amenazas/waze_incidents.geojson
 """
@@ -26,6 +27,7 @@ TIMEOUT=int(os.getenv("WAZE_TIMEOUT","30"))
 RETRIES=int(os.getenv("WAZE_RETRIES","2"))
 MAX_DEPTH=int(os.getenv("WAZE_MAX_DEPTH","2"))
 SIMULATE=os.getenv("WAZE_SIMULATE","false").lower() in ("true", "1", "yes")
+USE_BROWSER=os.getenv("WAZE_USE_BROWSER","true").lower() in ("true", "1", "yes")
 
 # Modern Waze Live Map API endpoint
 WAZE_API_BASE = "https://www.waze.com/live-map/api/georss"
@@ -84,92 +86,270 @@ def generate_simulated_data(s,w,n,e)->Dict[str,Any]:
     return {"alerts": alerts, "jams": jams, "irregularities": []}
 
 def fetch_from_live_map(s,w,n,e)->Dict[str,Any]:
-    """Fetch Waze data by scraping the live map webpage"""
-    import re
+    """Fetch Waze data by scraping the live map webpage using browser automation"""
+    
+    # Only try browser automation if enabled
+    if not USE_BROWSER:
+        raise RuntimeError("Browser automation disabled (WAZE_USE_BROWSER=false)")
+    
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.firefox.options import Options
+        from selenium.webdriver.firefox.service import Service
+        from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
+    except ImportError:
+        raise RuntimeError("Selenium not installed. Install with: pip install selenium")
     
     # Calculate center point for the live map URL
     center_lat = (s + n) / 2
     center_lon = (w + e) / 2
-    zoom = 12  # Reasonable zoom level for metropolitan areas
+    zoom = 13  # Reasonable zoom level for incident visibility
     
     # Construct live map URL
-    live_map_url = f"https://www.waze.com/es/live-map?zoom={zoom}&lat={center_lat}&lon={center_lon}"
+    live_map_url = f"https://www.waze.com/live-map?zoom={zoom}&lat={center_lat}&lon={center_lon}"
     
+    # Setup headless Firefox with optimized settings
+    firefox_options = Options()
+    firefox_options.add_argument("--headless")
+    firefox_options.add_argument("--no-sandbox")
+    firefox_options.add_argument("--disable-dev-shm-usage")
+    firefox_options.add_argument("--disable-gpu")
+    firefox_options.add_argument("--disable-software-rasterizer")
+    
+    # Disable automation detection
+    firefox_options.set_preference("dom.webdriver.enabled", False)
+    firefox_options.set_preference("useAutomationExtension", False)
+    
+    # Set display if not already set (for headless environments)
+    if "DISPLAY" not in os.environ:
+        os.environ["DISPLAY"] = ":99"
+    
+    # Use MOZ_HEADLESS=1 for better headless support
+    os.environ["MOZ_HEADLESS"] = "1"
+    
+    driver = None
     try:
-        # Fetch the live map page
-        r = requests.get(live_map_url, headers=UA, timeout=TIMEOUT)
-        if r.status_code != 200:
-            raise Exception(f"HTTP {r.status_code}")
+        # Initialize the driver with service
+        service = Service(log_path=os.devnull)  # Suppress geckodriver logs
+        driver = webdriver.Firefox(options=firefox_options, service=service)
+        driver.set_page_load_timeout(max(TIMEOUT, 15))
+        driver.set_script_timeout(10)
         
-        html_content = r.text
+        # Navigate to the live map
+        sys.stderr.write(f"[selenium] Loading {live_map_url}...\n")
+        driver.get(live_map_url)
         
-        # Try to extract JSON data from various patterns in the page
-        # Pattern 1: Look for embedded JSON in script tags
-        patterns = [
-            r'window\.__REDUX_STATE__\s*=\s*({.+?});',
-            r'window\.__NEXT_DATA__\s*=\s*({.+?})</script>',
-            r'"alerts"\s*:\s*(\[.+?\])',
-            r'"jams"\s*:\s*(\[.+?\])',
-            r'"irregularities"\s*:\s*(\[.+?\])',
+        # Wait for initial page load
+        time.sleep(2)
+        
+        # Close popups and modals - try multiple strategies
+        sys.stderr.write(f"[selenium] Closing popups...\n")
+        
+        # Strategy 1: Close cookie consent and privacy banners
+        popup_selectors = [
+            # Common button texts in multiple languages
+            ("xpath", "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accept')]"),
+            ("xpath", "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'aceptar')]"),
+            ("xpath", "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'got it')]"),
+            ("xpath", "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'entendido')]"),
+            ("xpath", "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'agree')]"),
+            ("xpath", "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue')]"),
+            
+            # Common IDs and classes
+            ("id", "onetrust-accept-btn-handler"),
+            ("css", "button[class*='cookie']"),
+            ("css", "button[class*='consent']"),
+            ("css", "button[aria-label='Close']"),
+            ("css", "button.modal-close"),
+            ("css", ".close-button"),
+            ("css", "[class*='close'][class*='button']"),
+            
+            # X buttons and close icons
+            ("xpath", "//button[contains(@aria-label, 'Close')]"),
+            ("xpath", "//button[contains(@aria-label, 'Cerrar')]"),
+            ("css", "button[aria-label*='close' i]"),
         ]
         
+        for selector_type, selector in popup_selectors:
+            try:
+                if selector_type == "xpath":
+                    elements = driver.find_elements(By.XPATH, selector)
+                elif selector_type == "id":
+                    elements = [driver.find_element(By.ID, selector)] if driver.find_elements(By.ID, selector) else []
+                else:  # css
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                
+                for element in elements[:3]:  # Try first 3 matches
+                    try:
+                        if element.is_displayed() and element.is_enabled():
+                            element.click()
+                            time.sleep(0.3)
+                            sys.stderr.write(f"[selenium] Closed popup via {selector_type}: {selector}\n")
+                    except:
+                        continue
+            except:
+                continue
+        
+        # Wait for map data to load
+        sys.stderr.write(f"[selenium] Waiting for map data...\n")
+        time.sleep(5)
+        
+        # Extract data from JavaScript objects in the page
         extracted_data = {"alerts": [], "jams": [], "irregularities": []}
         
-        for pattern in patterns:
-            matches = re.findall(pattern, html_content, re.DOTALL)
-            for match in matches:
-                try:
-                    # Try to parse as JSON
-                    data = json.loads(match)
+        # Multiple JavaScript extraction strategies
+        js_extractors = [
+            # Strategy 1: Direct window objects
+            """
+            (function() {
+                try {
+                    let result = {alerts: [], jams: [], irregularities: []};
                     
-                    # If it's a dict with our keys, extract them
-                    if isinstance(data, dict):
-                        if "alerts" in data:
-                            extracted_data["alerts"].extend(data.get("alerts", []))
-                        if "jams" in data:
-                            extracted_data["jams"].extend(data.get("jams", []))
-                        if "irregularities" in data:
-                            extracted_data["irregularities"].extend(data.get("irregularities", []))
-                    # If it's an array, try to determine what type
-                    elif isinstance(data, list) and len(data) > 0:
-                        # Try to infer type from first element
-                        if "reportDescription" in str(data[0]) or "street" in str(data[0]):
-                            extracted_data["alerts"].extend(data)
-                        elif "line" in str(data[0]) or "speed" in str(data[0]):
-                            extracted_data["jams"].extend(data)
-                except:
-                    continue
+                    // Check common state objects
+                    const stateObjects = [
+                        window.__REDUX_STATE__,
+                        window.__NEXT_DATA__,
+                        window.store && window.store.getState ? window.store.getState() : null
+                    ];
+                    
+                    for (let state of stateObjects) {
+                        if (state && typeof state === 'object') {
+                            // Deep search for our data
+                            function search(obj, depth = 0) {
+                                if (depth > 5 || !obj || typeof obj !== 'object') return;
+                                
+                                if (Array.isArray(obj.alerts)) result.alerts.push(...obj.alerts);
+                                if (Array.isArray(obj.jams)) result.jams.push(...obj.jams);
+                                if (Array.isArray(obj.irregularities)) result.irregularities.push(...obj.irregularities);
+                                
+                                for (let key in obj) {
+                                    if (obj.hasOwnProperty(key) && typeof obj[key] === 'object') {
+                                        search(obj[key], depth + 1);
+                                    }
+                                }
+                            }
+                            search(state);
+                        }
+                    }
+                    
+                    return JSON.stringify(result);
+                } catch (e) {
+                    return JSON.stringify({error: e.toString()});
+                }
+            })();
+            """,
+            
+            # Strategy 2: Search all window properties
+            """
+            (function() {
+                try {
+                    let result = {alerts: [], jams: [], irregularities: []};
+                    let seen = new Set();
+                    
+                    function extract(obj, depth = 0) {
+                        if (depth > 3 || !obj || typeof obj !== 'object') return;
+                        if (seen.has(obj)) return;
+                        seen.add(obj);
+                        
+                        if (Array.isArray(obj.alerts)) result.alerts.push(...obj.alerts);
+                        if (Array.isArray(obj.jams)) result.jams.push(...obj.jams);
+                        if (Array.isArray(obj.irregularities)) result.irregularities.push(...obj.irregularities);
+                        
+                        for (let key in obj) {
+                            try {
+                                if (typeof obj[key] === 'object' && obj[key] !== null) {
+                                    extract(obj[key], depth + 1);
+                                }
+                            } catch (e) {}
+                        }
+                    }
+                    
+                    // Search window properties
+                    for (let key in window) {
+                        try {
+                            if (key.startsWith('_') || key.includes('state') || key.includes('State') || key.includes('data')) {
+                                extract(window[key]);
+                            }
+                        } catch (e) {}
+                    }
+                    
+                    return JSON.stringify(result);
+                } catch (e) {
+                    return JSON.stringify({error: e.toString()});
+                }
+            })();
+            """
+        ]
+        
+        sys.stderr.write(f"[selenium] Extracting data...\n")
+        for idx, js_code in enumerate(js_extractors):
+            try:
+                result = driver.execute_script(js_code)
+                if result:
+                    data = json.loads(result)
+                    if isinstance(data, dict) and not data.get("error"):
+                        if data.get("alerts"):
+                            extracted_data["alerts"].extend(data["alerts"])
+                        if data.get("jams"):
+                            extracted_data["jams"].extend(data["jams"])
+                        if data.get("irregularities"):
+                            extracted_data["irregularities"].extend(data["irregularities"])
+                        
+                        if any(extracted_data.values()):
+                            sys.stderr.write(f"[selenium] Extracted data with strategy {idx+1}\n")
+                            break
+            except Exception as e:
+                sys.stderr.write(f"[selenium] Strategy {idx+1} failed: {e}\n")
+                continue
         
         # Filter by bounding box
         filtered_data = {"alerts": [], "jams": [], "irregularities": []}
         
         for alert in extracted_data.get("alerts", []):
+            if not isinstance(alert, dict):
+                continue
             loc = alert.get("location", {})
-            lat = loc.get("y") or loc.get("lat")
-            lon = loc.get("x") or loc.get("lon")
+            lat = loc.get("y") or loc.get("lat") or loc.get("latitude")
+            lon = loc.get("x") or loc.get("lon") or loc.get("longitude")
             if lat and lon and s <= lat <= n and w <= lon <= e:
                 filtered_data["alerts"].append(alert)
         
         for jam in extracted_data.get("jams", []):
-            # Check if any point of the jam is in the bbox
+            if not isinstance(jam, dict):
+                continue
             line = jam.get("line", [])
-            if any(s <= p.get("y", 0) <= n and w <= p.get("x", 0) <= e for p in line):
+            if line and any(s <= p.get("y", 0) <= n and w <= p.get("x", 0) <= e for p in line if isinstance(p, dict)):
                 filtered_data["jams"].append(jam)
         
         for irr in extracted_data.get("irregularities", []):
-            seg = irr.get("seg", {})
-            lat = seg.get("y") or seg.get("lat")
-            lon = seg.get("x") or seg.get("lon")
+            if not isinstance(irr, dict):
+                continue
+            seg = irr.get("seg", {}) or irr.get("location", {})
+            lat = seg.get("y") or seg.get("lat") or seg.get("latitude")
+            lon = seg.get("x") or seg.get("lon") or seg.get("longitude")
             if lat and lon and s <= lat <= n and w <= lon <= e:
                 filtered_data["irregularities"].append(irr)
+        
+        sys.stderr.write(f"[selenium] Filtered: {len(filtered_data['alerts'])} alerts, {len(filtered_data['jams'])} jams, {len(filtered_data['irregularities'])} irregularities\n")
         
         if any(filtered_data.values()):
             return filtered_data
         
         raise Exception("No data extracted from live map")
         
+    except WebDriverException as ex:
+        raise RuntimeError(f"Browser automation failed (WebDriver): {ex}")
     except Exception as ex:
         raise RuntimeError(f"Live map scraping failed: {ex}")
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
 
 def fetch_box(s,w,n,e)->Dict[str,Any]:
     """Fetch Waze data for a bounding box using modern API endpoints and web scraping"""
