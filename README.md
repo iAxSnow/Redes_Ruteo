@@ -49,7 +49,7 @@ pip install -r requirements.txt
 ```
 
 4. **Configurar variables de entorno**
-Crear archivo `.env`:
+Crear archivo `.env` (ver `.env.example` para referencia completa):
 ```env
 PGHOST=localhost
 PGPORT=5432
@@ -62,7 +62,12 @@ BBOX_S=-33.8
 BBOX_W=-70.95
 BBOX_N=-33.2
 BBOX_E=-70.45
+
+# OpenWeather API (opcional, para amenazas de clima)
+OPENWEATHER_KEY=your_api_key_here
 ```
+
+**Nota sobre OpenWeather API**: Las nuevas claves API pueden tardar hasta 2 horas en activarse después del registro. Si recibes errores 401 (Unauthorized), espera la activación completa antes de ejecutar el script de clima.
 
 ## Uso
 
@@ -75,20 +80,31 @@ python infraestructura/osm_roads_overpass_parallel.py
 python loaders/load_ways_nodes.py
 ```
 
-### 2. Cargar Amenazas
+### 2. Cargar Amenazas (Opcional)
+**Nota**: Las amenazas son opcionales. El sistema puede calcular rutas basadas solo en distancia sin necesidad de cargar amenazas. Las amenazas permiten calcular rutas considerando probabilidades de falla.
+
 ```bash
-# Extraer amenazas de Waze (opcional, usa datos de muestra si falla)
+# Extraer amenazas de Waze
+# Usa API → WebDriver (si disponible) → datos de muestra como fallback
 python amenazas/waze_incidents_parallel_adaptive.py
+
+# Para habilitar WebDriver: pip install selenium
+# Ver WEBDRIVER_SETUP.md para instrucciones completas
 
 # Cargar amenazas en base de datos
 python loaders/load_threats_waze.py
 
-# Otros extractores de amenazas (opcional)
+# Otros extractores de amenazas (todos opcionales)
 python amenazas/traffic_calming_as_threats_parallel.py
+
+# OpenWeather (requiere OPENWEATHER_KEY en .env y clave activada)
 python amenazas/weather_openweather_parallel.py
+python loaders/load_threats_weather.py
 ```
 
-### 3. Calcular Probabilidades de Falla
+### 3. Calcular Probabilidades de Falla (Opcional)
+**Nota**: Este paso es opcional y solo necesario si cargaste amenazas en el paso anterior. Si no ejecutas este paso, todas las rutas se calcularán basándose solo en distancia.
+
 ```bash
 python scripts/probability_model.py
 ```

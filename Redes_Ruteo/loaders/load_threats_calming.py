@@ -23,8 +23,22 @@ ROOT=Path(__file__).resolve().parents[1]
 GJ=ROOT/"amenazas"/"traffic_calming_threats.geojson"
 
 def main():
-    gj=json.loads(GJ.read_text(encoding="utf-8"))
+    if not GJ.exists():
+        print(f"[WARN] {GJ} no existe. Ejecuta primero traffic_calming_as_threats_parallel.py")
+        print("[INFO] No se cargaron amenazas de traffic calming.")
+        return
+    
+    try:
+        gj=json.loads(GJ.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[ERROR] No se pudo leer {GJ}: {e}")
+        return
+    
     feats=gj.get("features") or []
+    
+    if len(feats) == 0:
+        print(f"[WARN] {GJ} no contiene amenazas.")
+        return
 
     best={}
     for f in feats:
@@ -39,6 +53,10 @@ def main():
         rows.append((ext, p.get("kind"), p.get("subtype"), p.get("severity") or 1, Json(p), json.dumps(g)))
 
     print(f"[L] calming únicos: {len(rows)} (de {len(feats)})")
+    
+    if len(rows) == 0:
+        print("[WARN] No hay amenazas de traffic calming válidas para cargar.")
+        return
 
     with psycopg2.connect(host=PGHOST, port=PGPORT, dbname=PGDATABASE, user=PGUSER, password=PGPASSWORD) as conn:
         with conn.cursor() as cur:

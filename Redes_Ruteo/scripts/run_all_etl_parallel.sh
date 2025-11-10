@@ -36,11 +36,11 @@ runpy amenazas/traffic_calming_as_threats_parallel.py
 runpy loaders/load_threats_calming.py
 
 log "Amenazas — Waze paralelo"
-runpy amenazas/waze_incidents_parallel.py || warn "Waze extractor warning"
+runpy amenazas/waze_incidents_parallel_adaptive.py || warn "Waze extractor warning"
 runpy loaders/load_threats_waze.py
 
 log "Amenazas — Weather paralelo"
-runpy amenazas/weather_openweather_parallel.py
+runpy amenazas/weather_openweather_parallel.py || warn "Weather extractor warning (API key may not be activated yet)"
 runpy loaders/load_threats_weather.py
 
 # Exportar capas y abrir sitio

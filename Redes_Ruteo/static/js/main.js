@@ -67,15 +67,20 @@ function getUserLocation() {
             const lat = position.coords.latitude;
             const lng = position.coords.longitude;
             
-            // Remove previous marker if exists
+            // Remove previous user marker if exists
             if (userMarker) {
                 map.removeLayer(userMarker);
             }
             
-            // Add marker for user location
-            userMarker = L.marker([lat, lng], {
+            // Remove previous start marker if exists (we'll replace it with user location)
+            if (startMarker) {
+                map.removeLayer(startMarker);
+            }
+            
+            // Set user location as start point for routing
+            startMarker = L.marker([lat, lng], {
                 icon: L.icon({
-                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
+                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
                     shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
                     iconSize: [25, 41],
                     iconAnchor: [12, 41],
@@ -84,7 +89,13 @@ function getUserLocation() {
                 })
             }).addTo(map);
             
-            userMarker.bindPopup('<b>Mi Ubicación</b>').openPopup();
+            startMarker.bindPopup('<b>Mi Ubicación (Inicio)</b>').openPopup();
+            
+            // Set click mode to 'end' so next click sets the destination
+            clickMode = 'end';
+            
+            // Update instruction text
+            document.querySelector('.instruction-text').textContent = 'Haz clic en el mapa para seleccionar el punto final';
             
             // Center map on user location
             map.setView([lat, lng], 14);
@@ -93,7 +104,10 @@ function getUserLocation() {
             locationInfo.innerHTML = `
                 <p><strong>Latitud:</strong> ${lat.toFixed(6)}</p>
                 <p><strong>Longitud:</strong> ${lng.toFixed(6)}</p>
+                <p style="color: green;"><strong>✓ Establecido como punto de inicio</strong></p>
             `;
+            
+            console.log(`User location set as start point: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
         },
         (error) => {
             let errorMsg = 'Error desconocido';
@@ -147,6 +161,25 @@ function displayThreats(data) {
         return;
     }
     
+    // Count threats by type for debugging
+    const counts = {
+        waze: 0,
+        traffic_calming: 0,
+        weather: 0,
+        other: 0
+    };
+    
+    data.features.forEach(feature => {
+        const source = feature.properties.source;
+        if (counts[source] !== undefined) {
+            counts[source]++;
+        } else {
+            counts.other++;
+        }
+    });
+    
+    console.log(`Displaying threats - Total: ${data.features.length}, Waze: ${counts.waze}, Traffic Calming: ${counts.traffic_calming}, Weather: ${counts.weather}, Other: ${counts.other}`);
+    
     // Add GeoJSON layer with custom styling
     L.geoJSON(data, {
         pointToLayer: function(feature, latlng) {
@@ -179,23 +212,24 @@ function createThreatMarker(feature, latlng) {
     // Determine color and size based on threat type and severity
     if (props.source === 'waze') {
         if (props.subtype === 'CLOSURE') {
-            color = '#d73027';
+            color = '#d73027';  // Red for closures
             radius = 6;
         } else if (props.subtype === 'TRAFFIC_JAM') {
-            color = '#fc8d59';
+            color = '#fc8d59';  // Orange for traffic jams
             radius = 5;
         } else {
-            color = '#fee090';
+            color = '#fee090';  // Yellow for other incidents
             radius = 4;
         }
     } else if (props.source === 'traffic_calming') {
-        color = '#4575b4';
-        radius = 5;
+        // Make traffic calming more visible with blue color and larger size
+        color = '#4575b4';  // Blue for traffic calming (speed reducers)
+        radius = 6;  // Increased from 5 to make more visible
     } else if (props.source === 'weather') {
-        color = '#91bfdb';
+        color = '#91bfdb';  // Light blue for weather
         radius = 8;
     } else {
-        color = '#999999';
+        color = '#999999';  // Gray for unknown
         radius = 4;
     }
     
@@ -203,9 +237,9 @@ function createThreatMarker(feature, latlng) {
         radius: radius,
         fillColor: color,
         color: color,
-        weight: 1,
+        weight: 2,  // Increased border weight for better visibility
         opacity: 1,
-        fillOpacity: 0.7
+        fillOpacity: 0.8  // Increased from 0.7 for better visibility
     });
 }
 
@@ -317,9 +351,13 @@ function updateStats(data) {
 
 // Toggle threats visibility
 function toggleThreats(show) {
+    console.log(`Toggle threats visibility: ${show ? 'showing' : 'hiding'} all threats`);
     if (show) {
         if (threatsData) {
+            // Display ALL threats including Waze, Traffic Calming, and Weather
             displayThreats(threatsData);
+        } else {
+            console.log('No threats data loaded yet');
         }
     } else {
         threatsLayer.clearLayers();
