@@ -106,20 +106,70 @@ El script usará automáticamente WebDriver cuando:
 
 ## Troubleshooting
 
+### Error: "Chrome instance exited" o "session not created"
+**Causa**: Chrome/Chromium no está instalado o no puede iniciar.
+
+**Solución**:
+```bash
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install -y chromium-browser chromium-chromedriver
+
+# Verificar instalación
+chromium-browser --version
+chromedriver --version
+
+# Si los comandos no funcionan, puede que necesites:
+which chromium-browser  # Buscar ubicación de Chrome
+which chromedriver      # Buscar ubicación de ChromeDriver
+```
+
+**Alternativa**: El sistema automáticamente usará datos de muestra si WebDriver falla. No es necesario arreglarlo para usar el sistema.
+
 ### Error: "WebDriver executable not found"
 **Solución**: Instala ChromeDriver o añádelo a tu PATH
+```bash
+# Debian/Ubuntu
+sudo apt-get install chromium-chromedriver
+
+# O descarga manualmente desde:
+# https://chromedriver.chromium.org/downloads
+```
 
 ### Error: "Chrome binary not found"
 **Solución**: Instala Chrome/Chromium
+```bash
+# Ubuntu/Debian
+sudo apt-get install chromium-browser
+
+# Fedora
+sudo dnf install chromium
+
+# macOS
+brew install --cask google-chrome
+```
 
 ### Error: "Chrome version mismatch"
 **Solución**: Actualiza Chrome y ChromeDriver a versiones compatibles
+```bash
+# Ubuntu: actualizar ambos
+sudo apt-get update
+sudo apt-get upgrade chromium-browser chromium-chromedriver
+```
 
 ### WebDriver es muy lento
 **Solución**: 
 - Reduce `WAZE_RETRIES` en .env (default: 2)
 - Usa `WAZE_SIMULATE=true` para testing
-- El sistema automáticamente fallará a sample data si WebDriver toma demasiado tiempo
+- El sistema automáticamente usará sample data si WebDriver toma demasiado tiempo
+
+### "El sistema funciona pero no recoge datos de Waze en tiempo real"
+**Esto es normal si**:
+- Chrome/ChromeDriver no están instalados → Usa sample data
+- APIs de Waze están caídas → Usa sample data
+- WebDriver falla → Usa sample data
+
+**El sistema está diseñado para funcionar sin WebDriver**. Los datos de muestra permiten desarrollo y testing sin necesidad de configurar Chrome.
 
 ## Variables de Entorno
 

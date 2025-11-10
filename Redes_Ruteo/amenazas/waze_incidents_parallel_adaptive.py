@@ -137,29 +137,50 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
-        from selenium.common.exceptions import TimeoutException, WebDriverException
+        from selenium.common.exceptions import TimeoutException, WebDriverException, SessionNotCreatedException
         
         # Calculate center point for the live map URL
         center_lat = (s + n) / 2
         center_lon = (w + e) / 2
         zoom = 13  # Good zoom level for data collection
         
-        # Configure Chrome options for headless mode
+        # Configure Chrome options for headless mode with additional stability options
         chrome_options = Options()
-        chrome_options.add_argument('--headless')
+        chrome_options.add_argument('--headless=new')  # Use new headless mode
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
         chrome_options.add_argument('--disable-software-rasterizer')
         chrome_options.add_argument('--disable-extensions')
+        chrome_options.add_argument('--disable-setuid-sandbox')
+        chrome_options.add_argument('--remote-debugging-port=9222')
         chrome_options.add_argument(f'user-agent={UA["User-Agent"]}')
         chrome_options.add_argument('--window-size=1920,1080')
         
+        # Additional stability options
+        chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+        chrome_options.add_experimental_option('prefs', {
+            'profile.default_content_setting_values.notifications': 2,
+            'profile.managed_default_content_settings.images': 2
+        })
+        
         sys.stderr.write(f"[info] Starting WebDriver for tile {s:.4f},{w:.4f},{n:.4f},{e:.4f}\n")
         
-        # Initialize WebDriver
-        driver = webdriver.Chrome(options=chrome_options)
-        driver.set_page_load_timeout(TIMEOUT)
+        # Initialize WebDriver with better error handling
+        try:
+            driver = webdriver.Chrome(options=chrome_options)
+            driver.set_page_load_timeout(TIMEOUT)
+        except SessionNotCreatedException as e:
+            error_msg = str(e)
+            if "Chrome version" in error_msg or "ChromeDriver" in error_msg:
+                sys.stderr.write(f"[ERROR] ChromeDriver/Chrome version mismatch.\n")
+                sys.stderr.write(f"[ERROR] Install matching versions: See WEBDRIVER_SETUP.md\n")
+            elif "Chrome failed to start" in error_msg or "Chrome instance exited" in error_msg:
+                sys.stderr.write(f"[ERROR] Chrome/Chromium not properly installed or can't start.\n")
+                sys.stderr.write(f"[ERROR] Install Chrome: sudo apt-get install chromium-browser chromium-chromedriver\n")
+            else:
+                sys.stderr.write(f"[ERROR] WebDriver session error: {error_msg}\n")
+            raise RuntimeError(f"Chrome not available or misconfigured. Using fallback data.")
         
         try:
             # Navigate to Waze live map
@@ -256,14 +277,14 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
             driver.quit()
     
     except ImportError as e:
-        sys.stderr.write(f"[warn] Selenium not available: {e}\n")
-        raise RuntimeError(f"Selenium not installed: {e}")
-    except WebDriverException as e:
-        sys.stderr.write(f"[warn] WebDriver error: {e}\n")
-        raise RuntimeError(f"Browser automation failed (WebDriver): {e}")
+        sys.stderr.write(f"[info] Selenium not installed. Install with: pip install selenium\n")
+        raise RuntimeError(f"Selenium not available. Using fallback data.")
+    except (WebDriverException, SessionNotCreatedException) as e:
+        # More specific error message already logged above
+        raise RuntimeError(f"WebDriver unavailable. Using fallback data.")
     except Exception as e:
         sys.stderr.write(f"[warn] WebDriver fetch failed: {e}\n")
-        raise RuntimeError(f"WebDriver fetch failed: {e}")
+        raise RuntimeError(f"WebDriver failed. Using fallback data.")
 
 def fetch_box(s,w,n,e)->Dict[str,Any]:
     """Fetch Waze data for a bounding box using modern API endpoints, WebDriver, and sample data as fallback"""
@@ -319,15 +340,23 @@ def fetch_box(s,w,n,e)->Dict[str,Any]:
         if webdriver_data and (webdriver_data.get("alerts") or webdriver_data.get("jams")):
             return webdriver_data
     except Exception as ex:
-        last_error = f"WebDriver also failed: {ex}"
-        sys.stderr.write(f"[warn] {last_error}\n")
+        last_error = str(ex)
+        # Error messages already logged in fetch_with_webdriver
+        if "Chrome not available" in last_error or "WebDriver unavailable" in last_error:
+            sys.stderr.write(f"[info] WebDriver not available (Chrome/ChromeDriver issue). Falling back to sample data.\n")
+        elif "Selenium not available" in last_error:
+            sys.stderr.write(f"[info] Selenium not installed. Falling back to sample data.\n")
+        else:
+            sys.stderr.write(f"[info] WebDriver scraping failed. Falling back to sample data.\n")
     
     # If WebDriver also failed, use sample data as final fallback
-    sys.stderr.write(f"[info] Using sample data as final fallback\n")
+    sys.stderr.write(f"[OK] Using sample data from amenazas_muestra.geojson\n")
     sample_data = load_sample_data()
     if sample_data and (sample_data.get("alerts") or sample_data.get("jams")):
+        sys.stderr.write(f"[OK] Loaded {len(sample_data.get('alerts', []))} sample alerts, {len(sample_data.get('jams', []))} sample jams\n")
         return sample_data
     
+    sys.stderr.write(f"[ERROR] All data sources failed and no sample data available\n")
     raise RuntimeError(last_error if last_error else "Unknown error")
 
 def to_features(ch:Dict[str,Any])->List[Dict[str,Any]]:
