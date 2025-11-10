@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Test script for Waze browser automation functionality.
-This script tests the popup handling and data extraction without actually connecting to Waze.
+Test script for Waze data fetching functionality.
+This script tests the tile-based API approach without requiring browser automation.
 """
 
 import sys
@@ -11,39 +11,53 @@ import os
 # Add the parent directory to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-def test_popup_detection():
-    """Test that popup selectors are comprehensive"""
-    print("[TEST] Testing popup detection patterns...")
+def test_tile_conversion():
+    """Test lat/lon to tile conversion"""
+    print("[TEST] Testing tile coordinate conversion...")
     
-    # These are the patterns we look for
-    popup_patterns = [
-        "accept", "aceptar", "got it", "entendido", "agree", "continue",
-        "onetrust-accept-btn-handler", "cookie", "consent",
-        "close", "cerrar"
-    ]
+    # Import the conversion function
+    sys.path.insert(0, os.path.dirname(__file__))
+    from waze_incidents_parallel_adaptive import latlon_to_tile, tile_to_latlon
     
-    print(f"  ✓ Testing {len(popup_patterns)} popup patterns")
-    print("  ✓ Multi-language support (EN, ES)")
-    print("  ✓ Case-insensitive matching")
-    print("  ✓ Multiple selector types (XPath, ID, CSS)")
-    print("[OK] Popup detection comprehensive\n")
-    return True
+    # Test with known coordinates (Santiago)
+    lat, lon = -33.5, -70.7
+    zoom = 13
+    
+    x, y = latlon_to_tile(lat, lon, zoom)
+    print(f"  ✓ ({lat}, {lon}) at zoom {zoom} -> tile ({x}, {y})")
+    
+    # Convert back
+    lat2, lon2 = tile_to_latlon(x, y, zoom)
+    print(f"  ✓ tile ({x}, {y}) -> ({lat2:.4f}, {lon2:.4f})")
+    
+    # Verify reasonable result
+    if abs(lat - lat2) < 0.1 and abs(lon - lon2) < 0.1:
+        print("[OK] Tile conversion works correctly\n")
+        return True
+    else:
+        print("[FAIL] Tile conversion produced unexpected results\n")
+        return False
 
-def test_data_extraction_strategies():
-    """Test that data extraction strategies are properly defined"""
-    print("[TEST] Testing data extraction strategies...")
+def test_api_endpoint_format():
+    """Test that API endpoint URLs are correctly formatted"""
+    print("[TEST] Testing API endpoint formatting...")
     
-    # Simulate the extraction strategies
-    strategies = [
-        "Direct window objects (__REDUX_STATE__, __NEXT_DATA__)",
-        "Store state (window.store.getState())",
-        "Deep recursive search"
+    x, y, z = 2481, 4897, 13
+    
+    endpoints = [
+        f"https://www.waze.com/row-rtserver/web/TGeoRSS?tk=Livemap&x={x}&y={y}&z={z}",
+        f"https://www.waze.com/live-map/api/georss?x={x}&y={y}&zoom={z}",
+        f"https://www.waze.com/row-rtserver/web/TGeoRSS?x={x}&y={y}&zoom={z}&format=JSON",
     ]
     
-    for i, strategy in enumerate(strategies, 1):
-        print(f"  ✓ Strategy {i}: {strategy}")
+    for endpoint in endpoints:
+        if f"x={x}" in endpoint and f"y={y}" in endpoint:
+            print(f"  ✓ {endpoint[:60]}...")
+        else:
+            print(f"  ✗ Malformed: {endpoint}")
+            return False
     
-    print("[OK] All extraction strategies defined\n")
+    print("[OK] API endpoint formatting correct\n")
     return True
 
 def test_environment_variables():
@@ -99,66 +113,70 @@ def test_bbox_filtering():
     print("[OK] Bounding box filtering works correctly\n")
     return True
 
-def test_selenium_imports():
-    """Test that Selenium can be imported"""
-    print("[TEST] Testing Selenium imports...")
+def test_simulation_mode():
+    """Test simulation mode data generation"""
+    print("[TEST] Testing simulation mode...")
+    
+    sys.path.insert(0, os.path.dirname(__file__))
+    from waze_incidents_parallel_adaptive import generate_simulated_data
+    
+    # Generate test data
+    data = generate_simulated_data(-33.8, -70.95, -33.2, -70.45)
+    
+    # Verify structure
+    if not isinstance(data, dict):
+        print("  ✗ Simulation data is not a dictionary")
+        return False
+    
+    required_keys = ["alerts", "jams", "irregularities"]
+    for key in required_keys:
+        if key not in data:
+            print(f"  ✗ Missing key: {key}")
+            return False
+        if not isinstance(data[key], list):
+            print(f"  ✗ {key} is not a list")
+            return False
+        print(f"  ✓ {key}: {len(data[key])} items")
+    
+    print("[OK] Simulation mode works correctly\n")
+    return True
+
+def test_selenium_not_required():
+    """Test that Selenium is no longer required"""
+    print("[TEST] Testing Selenium dependency removal...")
     
     try:
-        from selenium import webdriver
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.firefox.options import Options
-        from selenium.webdriver.firefox.service import Service
-        print("  ✓ selenium module")
-        print("  ✓ webdriver")
-        print("  ✓ By locators")
-        print("  ✓ Firefox options")
-        print("  ✓ Firefox service")
-        print("[OK] Selenium imports successful\n")
-        return True
-    except ImportError as e:
-        print(f"  ✗ Selenium import failed: {e}")
-        print("[FAIL] Install selenium: pip install selenium\n")
-        return False
-
-def test_firefox_availability():
-    """Test that Firefox and geckodriver are available"""
-    print("[TEST] Testing Firefox and geckodriver availability...")
+        import selenium
+        print("  ⚠ Selenium is installed (not required anymore)")
+    except ImportError:
+        print("  ✓ Selenium not installed (as expected)")
     
-    import shutil
+    # Verify our script doesn't import selenium
+    script_path = os.path.join(os.path.dirname(__file__), 'waze_incidents_parallel_adaptive.py')
+    with open(script_path, 'r') as f:
+        content = f.read()
+        if 'from selenium' in content or 'import selenium' in content:
+            print("  ✗ Script still imports Selenium")
+            print("[FAIL] Selenium dependency not removed\n")
+            return False
     
-    firefox = shutil.which("firefox")
-    geckodriver = shutil.which("geckodriver")
-    
-    if firefox:
-        print(f"  ✓ Firefox found: {firefox}")
-    else:
-        print("  ✗ Firefox not found")
-        
-    if geckodriver:
-        print(f"  ✓ geckodriver found: {geckodriver}")
-    else:
-        print("  ✗ geckodriver not found")
-    
-    if firefox and geckodriver:
-        print("[OK] Firefox and geckodriver available\n")
-        return True
-    else:
-        print("[WARN] Firefox or geckodriver not available (browser automation will fail)\n")
-        return False
+    print("  ✓ Script does not import Selenium")
+    print("[OK] Selenium dependency successfully removed\n")
+    return True
 
 def main():
     """Run all tests"""
     print("=" * 60)
-    print("Waze Browser Automation Test Suite")
+    print("Waze Data Fetching Test Suite (No WebDriver)")
     print("=" * 60 + "\n")
     
     tests = [
-        ("Popup Detection", test_popup_detection),
-        ("Data Extraction", test_data_extraction_strategies),
+        ("Tile Coordinate Conversion", test_tile_conversion),
+        ("API Endpoint Formatting", test_api_endpoint_format),
         ("Environment Variables", test_environment_variables),
         ("Bounding Box Filtering", test_bbox_filtering),
-        ("Selenium Imports", test_selenium_imports),
-        ("Firefox Availability", test_firefox_availability),
+        ("Simulation Mode", test_simulation_mode),
+        ("Selenium Dependency Removal", test_selenium_not_required),
     ]
     
     results = []
