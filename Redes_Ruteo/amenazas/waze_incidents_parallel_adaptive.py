@@ -164,6 +164,18 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
             'profile.managed_default_content_settings.images': 2
         })
         
+        # Try to detect Chrome binary location (snap vs traditional install)
+        import shutil
+        chrome_binary = None
+        for potential_path in ['/snap/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome']:
+            if shutil.which(potential_path.split('/')[-1]) or Path(potential_path).exists():
+                chrome_binary = potential_path
+                break
+        
+        if chrome_binary:
+            chrome_options.binary_location = chrome_binary
+            sys.stderr.write(f"[info] Using Chrome binary: {chrome_binary}\n")
+        
         sys.stderr.write(f"[info] Starting WebDriver for tile {s:.4f},{w:.4f},{n:.4f},{e:.4f}\n")
         
         # Initialize WebDriver with better error handling

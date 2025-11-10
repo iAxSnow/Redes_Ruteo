@@ -26,28 +26,53 @@ def check_chrome_installed():
     
     commands = [
         ("chromium-browser --version", "Chromium"),
+        ("chromium.chromium --version", "Chromium (snap)"),
+        ("snap run chromium --version", "Chromium (snap alt)"),
         ("google-chrome --version", "Google Chrome"),
         ("chromium --version", "Chromium (alt)"),
         ("/usr/bin/chromium-browser --version", "Chromium (path)"),
+        ("/snap/bin/chromium --version", "Chromium (snap path)"),
     ]
     
     found = False
+    chrome_path = None
     for cmd, name in commands:
         code, stdout, stderr = run_command(cmd)
         if code == 0 and stdout:
             print(f"✓ {name} encontrado: {stdout}")
             found = True
+            if not chrome_path:
+                chrome_path = cmd.split()[0]
         else:
             print(f"✗ {name} no encontrado")
     
+    # Check if installed via snap
+    code, stdout, stderr = run_command("snap list chromium 2>/dev/null")
+    if code == 0 and "chromium" in stdout:
+        print("\nℹ️  Chromium detectado como instalación Snap")
+        print("   Esto puede requerir configuración adicional")
+        if not found:
+            # Try to find chromium in snap
+            code, stdout, stderr = run_command("which chromium")
+            if code == 0:
+                print(f"   Ubicación snap: {stdout}")
+                found = True
+    
     if not found:
-        print("\n❌ PROBLEMA: Chrome/Chromium no está instalado")
+        print("\n❌ PROBLEMA: Chrome/Chromium no está instalado o no es accesible")
         print("\nSOLUCIÓN:")
+        print("  # Opción 1: Instalar desde repositorios Ubuntu (recomendado)")
+        print("  sudo snap remove chromium  # Si está instalado vía snap")
         print("  sudo apt-get update")
         print("  sudo apt-get install -y chromium-browser")
+        print("")
+        print("  # Opción 2: Si usas snap, asegúrate que esté en PATH")
+        print("  export PATH=/snap/bin:$PATH")
         return False
     
     print("\n✓ Chrome/Chromium está instalado correctamente")
+    if chrome_path:
+        print(f"   Ubicación: {chrome_path}")
     return True
 
 def check_chromedriver_installed():
@@ -59,25 +84,47 @@ def check_chromedriver_installed():
     commands = [
         ("chromedriver --version", "ChromeDriver"),
         ("/usr/bin/chromedriver --version", "ChromeDriver (path)"),
+        ("/snap/bin/chromium.chromedriver --version", "ChromeDriver (snap)"),
+        ("chromium.chromedriver --version", "ChromeDriver (snap alt)"),
     ]
     
     found = False
+    driver_path = None
     for cmd, name in commands:
         code, stdout, stderr = run_command(cmd)
         if code == 0 and stdout:
             print(f"✓ {name} encontrado: {stdout}")
             found = True
+            if not driver_path:
+                driver_path = cmd.split()[0]
         else:
             print(f"✗ {name} no encontrado")
     
+    # Check if installed via snap
+    code, stdout, stderr = run_command("snap list chromium 2>/dev/null")
+    if code == 0 and "chromium" in stdout:
+        print("\nℹ️  ChromeDriver puede estar incluido en snap de Chromium")
+        # Try snap chromedriver
+        code, stdout, stderr = run_command("snap run chromium.chromedriver --version 2>/dev/null")
+        if code == 0:
+            print(f"   ChromeDriver snap: {stdout}")
+            found = True
+    
     if not found:
-        print("\n❌ PROBLEMA: ChromeDriver no está instalado")
+        print("\n❌ PROBLEMA: ChromeDriver no está instalado o no es accesible")
         print("\nSOLUCIÓN:")
+        print("  # Opción 1: Instalar desde repositorios Ubuntu (recomendado)")
+        print("  sudo snap remove chromium  # Si está instalado vía snap")
         print("  sudo apt-get update")
         print("  sudo apt-get install -y chromium-chromedriver")
+        print("")
+        print("  # Opción 2: Si usas snap, crear enlace simbólico")
+        print("  sudo ln -s /snap/bin/chromium.chromedriver /usr/local/bin/chromedriver")
         return False
     
     print("\n✓ ChromeDriver está instalado correctamente")
+    if driver_path:
+        print(f"   Ubicación: {driver_path}")
     return True
 
 def check_selenium_installed():

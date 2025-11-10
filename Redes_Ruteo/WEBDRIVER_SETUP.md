@@ -39,9 +39,31 @@ pip install -r requirements.txt
 ### 2. Instalar Chrome/Chromium
 
 #### Ubuntu/Debian
+
+**⚠️ IMPORTANTE**: Ubuntu 24.04+ puede instalar Chromium como snap por defecto. Para mejor compatibilidad, recomendamos desinstalar snap y usar el paquete tradicional:
+
 ```bash
+# Verificar si chromium está instalado como snap
+snap list chromium
+
+# Si está instalado como snap, desinstalarlo
+sudo snap remove chromium
+
+# Instalar desde repositorios Ubuntu (método recomendado)
 sudo apt-get update
 sudo apt-get install -y chromium-browser chromium-chromedriver
+```
+
+**Si prefieres usar Snap** (puede requerir configuración adicional):
+```bash
+sudo snap install chromium
+
+# Crear enlaces simbólicos para compatibilidad
+sudo ln -s /snap/bin/chromium /usr/local/bin/chromium-browser
+sudo ln -s /snap/bin/chromium.chromedriver /usr/local/bin/chromedriver
+
+# Agregar /snap/bin a PATH si no está
+export PATH=/snap/bin:$PATH
 ```
 
 #### Fedora/RHEL
@@ -143,7 +165,41 @@ El script usará automáticamente WebDriver cuando:
 
 ## Troubleshooting
 
-### Error: "Chrome instance exited" o "session not created"
+### Error: "Chrome instance exited" o "session not created" con instalación Snap
+
+**Síntoma**: El diagnóstico muestra que Chromium está instalado pero no puede ejecutarse.
+
+**Causa**: Chromium está instalado como snap (Ubuntu 24.04+) y no es accesible desde Python.
+
+**Solución (Opción 1 - Recomendada)**: Usar paquetes tradicionales:
+```bash
+# Desinstalar snap
+sudo snap remove chromium
+
+# Instalar paquetes tradicionales
+sudo apt-get update
+sudo apt-get install -y chromium-browser chromium-chromedriver
+
+# Verificar
+python scripts/diagnose_webdriver.py
+```
+
+**Solución (Opción 2)**: Configurar snap para que funcione:
+```bash
+# Crear enlaces simbólicos
+sudo ln -sf /snap/bin/chromium /usr/local/bin/chromium-browser
+sudo ln -sf /snap/bin/chromium.chromedriver /usr/local/bin/chromedriver
+
+# Agregar a PATH
+export PATH=/snap/bin:$PATH
+echo 'export PATH=/snap/bin:$PATH' >> ~/.bashrc
+
+# Verificar
+chromedriver --version
+chromium-browser --version
+```
+
+### Error: "Chrome instance exited" o "session not created" (general)
 **Causa**: Chrome/Chromium no está instalado o no puede iniciar.
 
 **Solución**:
