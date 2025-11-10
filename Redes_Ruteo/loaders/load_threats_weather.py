@@ -23,8 +23,23 @@ ROOT=Path(__file__).resolve().parents[1]
 GJ=ROOT/"amenazas"/"weather_threats.geojson"
 
 def main():
-    gj=json.loads(GJ.read_text(encoding="utf-8"))
+    if not GJ.exists():
+        print(f"[WARN] {GJ} no existe. Ejecuta primero weather_openweather_parallel.py")
+        print("[INFO] No se cargaron amenazas de clima.")
+        return
+    
+    try:
+        gj=json.loads(GJ.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[ERROR] No se pudo leer {GJ}: {e}")
+        return
+    
     feats=gj.get("features") or []
+    
+    if len(feats) == 0:
+        print(f"[WARN] {GJ} no contiene amenazas.")
+        print("[INFO] Puede ser que la API de OpenWeather aún no esté activada o que no haya condiciones climáticas severas.")
+        return
 
     best={}
     for f in feats:
@@ -41,6 +56,10 @@ def main():
         rows.append((ext, p.get("kind"), p.get("subtype"), p.get("severity") or 1, Json(p), json.dumps(g)))
 
     print(f"[L] clima únicos: {len(rows)} (de {len(feats)})")
+    
+    if len(rows) == 0:
+        print("[WARN] No hay amenazas de clima válidas para cargar.")
+        return
 
     with psycopg2.connect(host=PGHOST, port=PGPORT, dbname=PGDATABASE, user=PGUSER, password=PGPASSWORD) as conn:
         with conn.cursor() as cur:
