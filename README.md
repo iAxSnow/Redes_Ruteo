@@ -87,15 +87,15 @@ python loaders/load_ways_nodes.py
 
 Para producción, necesitas **datos reales de Waze**. El sistema tiene una estrategia de 3 niveles:
 1. **APIs de Waze** (preferido, pero a menudo fallan)
-2. **WebDriver con Chrome** (confiable para datos reales) ← **RECOMENDADO**
+2. **WebDriver con Firefox** (confiable para datos reales) ← **RECOMENDADO**
 3. **Datos de muestra** (solo para desarrollo/testing)
 
 #### Configurar WebDriver para Datos Reales
 
 ```bash
-# 1. Instalar Chrome/ChromeDriver
+# 1. Instalar Firefox y GeckoDriver
 sudo apt-get update
-sudo apt-get install -y chromium-browser chromium-chromedriver
+sudo apt-get install -y firefox firefox-geckodriver
 
 # 2. Instalar Selenium
 pip install selenium

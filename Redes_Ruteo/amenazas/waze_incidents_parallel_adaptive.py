@@ -3,7 +3,7 @@
 """
 Waze fetcher adaptativo:
 - Usa la API moderna de Waze Live Map (tile-based system)
-- Si las APIs fallan, intenta scraping con Selenium WebDriver
+- Si las APIs fallan, intenta scraping con Selenium WebDriver (Firefox)
 - Si WebDriver falla, usa datos de muestra como respaldo final
 - Sistema de tiles basado en zoom levels
 - Si un tile devuelve 404 o error, lo subdivide en 4 (hasta profundidad 2)
@@ -11,7 +11,10 @@ Waze fetcher adaptativo:
 
 Salida: amenazas/waze_incidents.geojson
 
-Requiere: selenium>=4.15.2 para WebDriver (opcional, usa fallback si no está disponible)
+Requiere: 
+  - selenium>=4.15.2 para WebDriver
+  - Firefox y GeckoDriver: sudo apt-get install firefox firefox-geckodriver
+  (opcional, usa fallback si no está disponible)
 """
 import os, json, sys, time, re
 from pathlib import Path
@@ -129,11 +132,11 @@ def load_sample_data()->Dict[str,Any]:
     return {"alerts": [], "jams": [], "irregularities": []}
 
 def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
-    """Fetch Waze data using Selenium WebDriver for dynamic content"""
+    """Fetch Waze data using Selenium WebDriver (Firefox) for dynamic content"""
     try:
         from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
-        from selenium.webdriver.chrome.service import Service
+        from selenium.webdriver.firefox.options import Options
+        from selenium.webdriver.firefox.service import Service
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
@@ -144,55 +147,37 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
         center_lon = (w + e) / 2
         zoom = 13  # Good zoom level for data collection
         
-        # Configure Chrome options for headless mode with additional stability options
-        chrome_options = Options()
-        chrome_options.add_argument('--headless=new')  # Use new headless mode
-        chrome_options.add_argument('--no-sandbox')
-        chrome_options.add_argument('--disable-dev-shm-usage')
-        chrome_options.add_argument('--disable-gpu')
-        chrome_options.add_argument('--disable-software-rasterizer')
-        chrome_options.add_argument('--disable-extensions')
-        chrome_options.add_argument('--disable-setuid-sandbox')
-        chrome_options.add_argument('--remote-debugging-port=9222')
-        chrome_options.add_argument(f'user-agent={UA["User-Agent"]}')
-        chrome_options.add_argument('--window-size=1920,1080')
+        # Configure Firefox options for headless mode
+        firefox_options = Options()
+        firefox_options.add_argument('-headless')  # Headless mode for containers
+        firefox_options.set_preference('general.useragent.override', UA["User-Agent"])
+        firefox_options.set_preference('permissions.default.image', 2)  # Disable images for faster loading
+        firefox_options.set_preference('dom.webnotifications.enabled', False)  # Disable notifications
         
-        # Additional stability options
-        chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
-        chrome_options.add_experimental_option('prefs', {
-            'profile.default_content_setting_values.notifications': 2,
-            'profile.managed_default_content_settings.images': 2
-        })
+        sys.stderr.write(f"[info] Starting Firefox WebDriver for tile {s:.4f},{w:.4f},{n:.4f},{e:.4f}\n")
         
-        # Try to detect Chrome binary location (snap vs traditional install)
-        import shutil
-        chrome_binary = None
-        for potential_path in ['/snap/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome']:
-            if shutil.which(potential_path.split('/')[-1]) or Path(potential_path).exists():
-                chrome_binary = potential_path
-                break
-        
-        if chrome_binary:
-            chrome_options.binary_location = chrome_binary
-            sys.stderr.write(f"[info] Using Chrome binary: {chrome_binary}\n")
-        
-        sys.stderr.write(f"[info] Starting WebDriver for tile {s:.4f},{w:.4f},{n:.4f},{e:.4f}\n")
-        
-        # Initialize WebDriver with better error handling
+        # Initialize Firefox WebDriver with better error handling
         try:
-            driver = webdriver.Chrome(options=chrome_options)
+            driver = webdriver.Firefox(options=firefox_options)
             driver.set_page_load_timeout(TIMEOUT)
+            sys.stderr.write(f"[info] Firefox WebDriver started successfully\n")
         except SessionNotCreatedException as e:
             error_msg = str(e)
-            if "Chrome version" in error_msg or "ChromeDriver" in error_msg:
-                sys.stderr.write(f"[ERROR] ChromeDriver/Chrome version mismatch.\n")
-                sys.stderr.write(f"[ERROR] Install matching versions: See WEBDRIVER_SETUP.md\n")
-            elif "Chrome failed to start" in error_msg or "Chrome instance exited" in error_msg:
-                sys.stderr.write(f"[ERROR] Chrome/Chromium not properly installed or can't start.\n")
-                sys.stderr.write(f"[ERROR] Install Chrome: sudo apt-get install chromium-browser chromium-chromedriver\n")
+            if "geckodriver" in error_msg.lower():
+                sys.stderr.write(f"[ERROR] GeckoDriver not found or incompatible.\n")
+                sys.stderr.write(f"[ERROR] Install: sudo apt-get install firefox-geckodriver\n")
+            elif "Firefox" in error_msg or "firefox" in error_msg.lower():
+                sys.stderr.write(f"[ERROR] Firefox not properly installed or can't start.\n")
+                sys.stderr.write(f"[ERROR] Install Firefox: sudo apt-get install firefox\n")
             else:
                 sys.stderr.write(f"[ERROR] WebDriver session error: {error_msg}\n")
-            raise RuntimeError(f"Chrome not available or misconfigured. Using fallback data.")
+            raise RuntimeError(f"Firefox not available or misconfigured. Using fallback data.")
+        except WebDriverException as e:
+            error_msg = str(e)
+            sys.stderr.write(f"[ERROR] Firefox WebDriver error: {error_msg}\n")
+            if "geckodriver" in error_msg.lower():
+                sys.stderr.write(f"[ERROR] Install GeckoDriver: sudo apt-get install firefox-geckodriver\n")
+            raise RuntimeError(f"Firefox WebDriver failed. Using fallback data.")
         
         try:
             # Navigate to Waze live map
