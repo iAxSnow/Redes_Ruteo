@@ -214,7 +214,8 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
             
             # Try to extract data from the page
             # Method 1: Check for embedded JSON in script tags or window objects
-            script = """
+            # Updated to check multiple common data sources in Waze Live Map
+            script = r"""
                 try {
                     // Try to find data in various places
                     if (window.__NEXT_DATA__ && window.__NEXT_DATA__.props) {
@@ -227,6 +228,21 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
                     if (window.WazeData) {
                         return JSON.stringify(window.WazeData);
                     }
+                    if (window.wazeMapData) {
+                        return JSON.stringify(window.wazeMapData);
+                    }
+                    // Check for data in script tags
+                    var scripts = document.getElementsByTagName('script');
+                    for (var i = 0; i < scripts.length; i++) {
+                        var content = scripts[i].textContent;
+                        if (content.includes('alerts') || content.includes('jams')) {
+                            // Try to extract JSON
+                            var jsonMatch = content.match(/(\{.*"alerts".*\})/);
+                            if (jsonMatch) {
+                                return jsonMatch[1];
+                            }
+                        }
+                    }
                     return null;
                 } catch(e) {
                     return null;
@@ -234,6 +250,36 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
             """
             
             data_json = driver.execute_script(script)
+            
+            # If no data found, try alternative: parse page elements directly
+            if not data_json:
+                print("[info] Trying alternative extraction method...")
+                try:
+                    # Try to extract visible markers/data from DOM elements
+                    element_script = """
+                        try {
+                            var result = {alerts: [], jams: []};
+                            // Try to find map markers or data elements
+                            var markers = document.querySelectorAll('[data-alert], [data-jam], .alert-marker, .jam-marker');
+                            markers.forEach(function(m) {
+                                var data = m.getAttribute('data-alert') || m.getAttribute('data-jam');
+                                if (data) {
+                                    try {
+                                        var parsed = JSON.parse(data);
+                                        if (parsed.type === 'alert') result.alerts.push(parsed);
+                                        if (parsed.type === 'jam') result.jams.push(parsed);
+                                    } catch(e) {}
+                                }
+                            });
+                            return result.alerts.length > 0 || result.jams.length > 0 ? JSON.stringify(result) : null;
+                        } catch(e) {
+                            return null;
+                        }
+                    """
+                    data_json = driver.execute_script(element_script)
+                except Exception as e:
+                    print(f"[warn] Alternative extraction also failed: {e}")
+                    data_json = None
             
             if data_json:
                 data = json.loads(data_json)

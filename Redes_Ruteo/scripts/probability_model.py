@@ -219,21 +219,25 @@ def calculate_failure_probabilities(conn):
         
         # Process Traffic Calming threats
         if calming_count > 0:
+            # Use spatial index and batch processing for better performance with many threats
+            print(f"  Processing {calming_count} traffic calming threats (this may take a moment)...")
             cur.execute("""
                 UPDATE rr.ways w
                 SET fail_prob = GREATEST(
                     COALESCE(w.fail_prob, 0.0),
                     %(prob)s * 0.3
                 )
-                WHERE EXISTS (
-                    SELECT 1
-                    FROM rr.amenazas_calming t
-                    WHERE ST_DWithin(
-                        w.geom::geography,
+                FROM (
+                    SELECT DISTINCT w2.gid
+                    FROM rr.ways w2
+                    JOIN rr.amenazas_calming t
+                    ON ST_DWithin(
+                        w2.geom::geography,
                         t.geom::geography,
                         %(radius)s
                     )
-                )
+                ) AS affected_ways
+                WHERE w.gid = affected_ways.gid
             """, {
                 'prob': FAILURE_PROBABILITY,
                 'radius': INFLUENCE_RADIUS_M
