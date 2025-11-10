@@ -35,11 +35,9 @@ export BBOX_E=-70.45
 
 # API settings
 export WAZE_TIMEOUT=30        # Request timeout in seconds
-export WAZE_RETRIES=2         # Number of retry attempts
+export WAZE_RETRIES=3         # Number of retry attempts
 export WAZE_MAX_DEPTH=2       # Maximum subdivision depth
-
-# Browser automation settings (NEW)
-export WAZE_USE_BROWSER=true  # Enable/disable browser automation (default: true)
+export WAZE_ZOOM=13           # Zoom level for tile requests (12-14 recommended)
 
 # Testing mode
 export WAZE_SIMULATE=true     # Enable simulation mode
@@ -47,19 +45,16 @@ export WAZE_SIMULATE=true     # Enable simulation mode
 
 ## Requirements
 
-The browser automation feature requires:
+The improved fetcher only requires:
 
-1. **Selenium**: `pip install selenium`
-2. **Firefox** and **geckodriver**: Already available on most systems
-3. **Display**: Works with Xvfb for headless environments
+1. **requests**: HTTP library (included in requirements.txt)
+2. **Python 3.8+**: Standard library for math and JSON operations
+
+**No browser automation required!** Selenium, Firefox, and geckodriver are no longer needed.
 
 ```bash
 # Install dependencies
 pip install -r requirements.txt
-
-# For headless servers, ensure Xvfb is running
-Xvfb :99 -screen 0 1920x1080x24 &
-export DISPLAY=:99
 ```
 
 ## Simulation Mode
@@ -75,80 +70,60 @@ This generates realistic sample data that matches the actual API structure, usef
 - Demo purposes
 - When Waze API is down
 
-## API Endpoints and Web Scraping
+## API Approach
 
-The fetcher uses a multi-layered approach to fetch Waze data:
+The fetcher uses a multi-layered approach to fetch Waze data without browser automation:
 
-### Layer 1: API Endpoints
-Tries multiple Waze API endpoints in order:
+### Layer 1: Bounding Box API (Primary)
+First tries the bbox-based API endpoints:
 
 1. `https://www.waze.com/live-map/api/georss` - Primary modern API
 2. `https://www.waze.com/row-rtserver/web/TGeoRSS` - Rest of World server
 3. `https://www.waze.com/partnerhub-api/georss` - Partner Hub API
 
-### Layer 2: Browser Automation Fallback (NEW)
-If all API endpoints fail, automatically falls back to browser-based scraping:
-- **Opens Firefox** in headless mode with Selenium
-- **Navigates** to `https://www.waze.com/live-map` with the appropriate coordinates
-- **Closes popups/modals** automatically:
-  - Cookie consent banners (Accept/Aceptar/Got it/Entendido)
-  - Privacy notices
-  - Welcome/tutorial modals
-  - Any close buttons or overlays
-- **Extracts incident data** from JavaScript objects in the browser context:
-  - Searches for `window.__REDUX_STATE__`, `window.__NEXT_DATA__`, and other state objects
-  - Extracts alerts, jams, and irregularities
-- **Filters results** by the specified bounding box
-- Works even when API endpoints are blocked or unavailable
+These endpoints accept bounding box parameters (bottom, left, top, right) and return all incidents in the area.
 
-### Layer 3: Tile Subdivision
+### Layer 2: Tile-Based API (Fallback)
+If bbox API fails, uses a tile-based approach:
+- Converts the bounding box to tile coordinates at the configured zoom level
+- Requests data for each tile individually
+- Supports parameters like `?tk=Livemap&x=X&y=Y&z=ZOOM`
+- Limits tile requests to avoid overwhelming the API (max 50 tiles)
+
+### Layer 3: Sample Data (Final Fallback)
+If all API methods fail:
+- Generates sample data with realistic structure
+- Ensures the system can continue operating
+- Provides consistent test data for development
+
+**Benefits of this approach:**
+- ✅ No browser automation required
+- ✅ Faster and more reliable
+- ✅ Works in headless environments
+- ✅ No Selenium/WebDriver dependencies
+- ✅ Lower resource usage
+- ✅ Better error handling
+
+### Layer 4: Tile Subdivision
 If both APIs and browser automation fail for a region:
 - Subdivides the bounding box into 4 smaller tiles
 - Retries each tile independently (up to MAX_DEPTH subdivisions)
 - Preserves existing data file if no new data is fetched
 
-## Browser Automation Details
+## Removed: Browser Automation
 
-The new browser automation feature provides a robust solution for accessing the Waze live map:
+**Previous versions** used Selenium WebDriver with Firefox for web scraping. This has been **removed** because:
+- ❌ Unreliable in CI/CD environments
+- ❌ Required display server (Xvfb)
+- ❌ Chrome/Firefox compatibility issues
+- ❌ High resource usage
+- ❌ Complex setup and maintenance
 
-### Features
-- **Headless mode**: Runs without visible browser window
-- **Anti-detection measures**: Custom User-Agent and disabled automation flags to avoid blocking
-- **Popup handling**: Automatically closes cookie banners, consent dialogs, and modals
-- **Multi-language support**: Handles buttons in English, Spanish, and other languages
-- **Smart data extraction**: Multiple JavaScript extraction strategies to find incident data
-- **Automatic retries**: Retries with different strategies if initial extraction fails
-- **Bounding box filtering**: Only returns incidents within the specified geographic area
-
-### Anti-Detection Configuration
-To avoid being blocked as a bot, the implementation:
-1. **Custom User-Agent**: Uses Chrome User-Agent (`Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36`)
-2. **Disabled automation flags**: Sets `dom.webdriver.enabled=false` and `useAutomationExtension=false`
-3. **Natural headers**: Includes Referer, Accept-Language, and Origin headers
-4. **Timing**: Adds realistic delays between actions (2-5 seconds)
-
-### Popup Detection Strategies
-The script tries to close popups using:
-1. Text-based detection (Accept, Aceptar, Got it, Entendido, etc.)
-2. ID-based detection (onetrust-accept-btn-handler, etc.)
-3. Class-based detection (cookie buttons, consent buttons, modal close buttons)
-4. ARIA label detection (Close, Cerrar, etc.)
-
-### Data Extraction Strategies
-The script uses multiple approaches to extract data:
-1. Direct window object inspection (`window.__REDUX_STATE__`, `window.__NEXT_DATA__`)
-2. Store state extraction (`window.store.getState()`)
-3. Deep recursive search through all window properties
-
-### Disabling Browser Automation
-If you want to disable browser automation (e.g., in environments without display):
-
-```bash
-export WAZE_USE_BROWSER=false
-python amenazas/waze_incidents_parallel_adaptive.py
-```
-
-Note: This will only use API endpoints and not the browser-based fallback.
+The new implementation uses only HTTP requests to Waze APIs, making it:
+- ✅ Simpler to deploy
+- ✅ More reliable
+- ✅ Easier to maintain
+- ✅ Works in any environment
 
 ## Output Format
 
