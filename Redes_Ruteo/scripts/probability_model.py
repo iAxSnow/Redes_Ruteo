@@ -129,36 +129,117 @@ def calculate_failure_probabilities(conn):
     """
     Calculate failure probabilities based on threat proximity.
     Assigns probabilities to network elements within influence radius of threats.
+    Processes all threat sources: Waze, Weather, and Traffic Calming.
     """
     with conn.cursor() as cur:
-        # Get count of threats
-        cur.execute("SELECT COUNT(*) FROM rr.amenazas_waze")
-        threat_count = cur.fetchone()[0]
-        print(f"Processing {threat_count} Waze threats...")
+        # Check which threat tables exist and get counts
+        waze_count = 0
+        weather_count = 0
+        calming_count = 0
         
-        # Update ways within influence radius of threats
-        print(f"Calculating probabilities for ways (radius: {INFLUENCE_RADIUS_M}m)...")
-        cur.execute("""
-            UPDATE rr.ways w
-            SET fail_prob = GREATEST(
-                COALESCE(w.fail_prob, 0.0),
-                %(prob)s
-            )
-            WHERE EXISTS (
-                SELECT 1
-                FROM rr.amenazas_waze t
-                WHERE ST_DWithin(
-                    w.geom::geography,
-                    t.geom::geography,
-                    %(radius)s
+        # Check Waze threats
+        try:
+            cur.execute("SELECT COUNT(*) FROM rr.amenazas_waze")
+            waze_count = cur.fetchone()[0]
+        except Exception:
+            print("⚠ Table rr.amenazas_waze does not exist or is not accessible")
+        
+        # Check Weather threats
+        try:
+            cur.execute("SELECT COUNT(*) FROM rr.amenazas_clima")
+            weather_count = cur.fetchone()[0]
+        except Exception:
+            print("⚠ Table rr.amenazas_clima does not exist or is not accessible")
+        
+        # Check Traffic Calming threats
+        try:
+            cur.execute("SELECT COUNT(*) FROM rr.amenazas_calming")
+            calming_count = cur.fetchone()[0]
+        except Exception:
+            print("⚠ Table rr.amenazas_calming does not exist or is not accessible")
+        
+        total_threats = waze_count + weather_count + calming_count
+        
+        if total_threats == 0:
+            print("\n⚠ No threats found in any table. All failure probabilities will remain at 0.0.")
+            print("  This is normal if you haven't loaded threat data yet.")
+            print("  Routes will be calculated based on distance only.")
+            return
+        
+        print(f"\nProcessing {total_threats} threats total:")
+        print(f"  - Waze: {waze_count}")
+        print(f"  - Weather: {weather_count}")
+        print(f"  - Traffic Calming: {calming_count}")
+        
+        # Update ways within influence radius of threats (from all sources)
+        print(f"\nCalculating probabilities for ways (radius: {INFLUENCE_RADIUS_M}m)...")
+        
+        # Process Waze threats
+        if waze_count > 0:
+            cur.execute("""
+                UPDATE rr.ways w
+                SET fail_prob = GREATEST(
+                    COALESCE(w.fail_prob, 0.0),
+                    %(prob)s
                 )
-            )
-        """, {
-            'prob': FAILURE_PROBABILITY,
-            'radius': INFLUENCE_RADIUS_M
-        })
-        ways_affected = cur.rowcount
-        print(f"✓ Updated {ways_affected} ways with failure probability {FAILURE_PROBABILITY}")
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM rr.amenazas_waze t
+                    WHERE ST_DWithin(
+                        w.geom::geography,
+                        t.geom::geography,
+                        %(radius)s
+                    )
+                )
+            """, {
+                'prob': FAILURE_PROBABILITY,
+                'radius': INFLUENCE_RADIUS_M
+            })
+            waze_affected = cur.rowcount
+            print(f"✓ Updated {waze_affected} ways based on Waze threats")
+        
+        # Process Weather threats
+        if weather_count > 0:
+            cur.execute("""
+                UPDATE rr.ways w
+                SET fail_prob = GREATEST(
+                    COALESCE(w.fail_prob, 0.0),
+                    %(prob)s * (t.severity / 3.0)
+                )
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM rr.amenazas_clima t
+                    WHERE ST_Intersects(w.geom, t.geom)
+                )
+            """, {
+                'prob': FAILURE_PROBABILITY
+            })
+            weather_affected = cur.rowcount
+            print(f"✓ Updated {weather_affected} ways based on Weather threats")
+        
+        # Process Traffic Calming threats
+        if calming_count > 0:
+            cur.execute("""
+                UPDATE rr.ways w
+                SET fail_prob = GREATEST(
+                    COALESCE(w.fail_prob, 0.0),
+                    %(prob)s * 0.3
+                )
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM rr.amenazas_calming t
+                    WHERE ST_DWithin(
+                        w.geom::geography,
+                        t.geom::geography,
+                        %(radius)s
+                    )
+                )
+            """, {
+                'prob': FAILURE_PROBABILITY,
+                'radius': INFLUENCE_RADIUS_M
+            })
+            calming_affected = cur.rowcount
+            print(f"✓ Updated {calming_affected} ways based on Traffic Calming threats")
         
         # Update vertices within influence radius of threats (if table exists)
         cur.execute("""
@@ -181,28 +262,74 @@ def calculate_failure_probabilities(conn):
             """)
             
             if cur.fetchone():
-                print(f"Calculating probabilities for vertices (radius: {INFLUENCE_RADIUS_M}m)...")
-                cur.execute("""
-                    UPDATE rr.ways_vertices_pgr v
-                    SET fail_prob = GREATEST(
-                        COALESCE(v.fail_prob, 0.0),
-                        %(prob)s
-                    )
-                    WHERE EXISTS (
-                        SELECT 1
-                        FROM rr.amenazas_waze t
-                        WHERE ST_DWithin(
-                            v.geom::geography,
-                            t.geom::geography,
-                            %(radius)s
+                print(f"\nCalculating probabilities for vertices (radius: {INFLUENCE_RADIUS_M}m)...")
+                
+                # Process Waze threats for vertices
+                if waze_count > 0:
+                    cur.execute("""
+                        UPDATE rr.ways_vertices_pgr v
+                        SET fail_prob = GREATEST(
+                            COALESCE(v.fail_prob, 0.0),
+                            %(prob)s
                         )
-                    )
-                """, {
-                    'prob': FAILURE_PROBABILITY,
-                    'radius': INFLUENCE_RADIUS_M
-                })
-                vertices_affected = cur.rowcount
-                print(f"✓ Updated {vertices_affected} vertices with failure probability {FAILURE_PROBABILITY}")
+                        WHERE EXISTS (
+                            SELECT 1
+                            FROM rr.amenazas_waze t
+                            WHERE ST_DWithin(
+                                v.geom::geography,
+                                t.geom::geography,
+                                %(radius)s
+                            )
+                        )
+                    """, {
+                        'prob': FAILURE_PROBABILITY,
+                        'radius': INFLUENCE_RADIUS_M
+                    })
+                    vertices_waze = cur.rowcount
+                    print(f"✓ Updated {vertices_waze} vertices based on Waze threats")
+                
+                # Process Weather threats for vertices
+                if weather_count > 0:
+                    cur.execute("""
+                        UPDATE rr.ways_vertices_pgr v
+                        SET fail_prob = GREATEST(
+                            COALESCE(v.fail_prob, 0.0),
+                            %(prob)s * (t.severity / 3.0)
+                        )
+                        WHERE EXISTS (
+                            SELECT 1
+                            FROM rr.amenazas_clima t
+                            WHERE ST_Intersects(v.geom, t.geom)
+                        )
+                    """, {
+                        'prob': FAILURE_PROBABILITY
+                    })
+                    vertices_weather = cur.rowcount
+                    print(f"✓ Updated {vertices_weather} vertices based on Weather threats")
+                
+                # Process Traffic Calming threats for vertices
+                if calming_count > 0:
+                    cur.execute("""
+                        UPDATE rr.ways_vertices_pgr v
+                        SET fail_prob = GREATEST(
+                            COALESCE(v.fail_prob, 0.0),
+                            %(prob)s * 0.3
+                        )
+                        WHERE EXISTS (
+                            SELECT 1
+                            FROM rr.amenazas_calming t
+                            WHERE ST_DWithin(
+                                v.geom::geography,
+                                t.geom::geography,
+                                %(radius)s
+                            )
+                        )
+                    """, {
+                        'prob': FAILURE_PROBABILITY,
+                        'radius': INFLUENCE_RADIUS_M
+                    })
+                    vertices_calming = cur.rowcount
+                    print(f"✓ Updated {vertices_calming} vertices based on Traffic Calming threats")
             else:
                 print("⚠ ways_vertices_pgr table exists but geom column not found")
         

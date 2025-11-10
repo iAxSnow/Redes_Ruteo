@@ -64,10 +64,14 @@ def severity(m):
 
 def main():
     cells=list(grid_cells(BBOX_S,BBOX_W,BBOX_N,BBOX_E,GRID))
+    print(f"[INFO] Fetching weather data for {len(cells)} grid cells...")
+    print(f"[INFO] Using API key: {KEY[:10]}...{KEY[-4:]}")
+    
     feats=[]
+    errors=[]
     with ThreadPoolExecutor(max_workers=PAR) as ex:
         futs=[ex.submit(fetch, c[4], c[5]) for c in cells]
-        for (cell,fut) in zip(cells, as_completed(futs)):
+        for i, (cell,fut) in enumerate(zip(cells, as_completed(futs))):
             try:
                 res=fut.result()
                 sev,rain,wind=severity(res)
@@ -79,10 +83,35 @@ def main():
                     [[cell[1],cell[0]],[cell[3],cell[0]],[cell[3],cell[2]],[cell[1],cell[2]],[cell[1],cell[0]]]
                 ]}
                 feats.append({"type":"Feature","geometry":poly,"properties":props})
+                if (i + 1) % 10 == 0:
+                    print(f"[INFO] Processed {i + 1}/{len(cells)} cells...")
             except Exception as ex:
+                error_msg = str(ex)
+                # Log first few errors to help diagnose issues
+                if len(errors) < 3:
+                    print(f"[WARN] Error fetching cell {cell[4]:.3f},{cell[5]:.3f}: {error_msg}", file=sys.stderr)
+                errors.append(error_msg)
                 continue
+    
+    if errors:
+        print(f"[WARN] Encountered {len(errors)} errors during fetch", file=sys.stderr)
+        if "401" in str(errors[0]) or "Unauthorized" in str(errors[0]):
+            print("[ERROR] API key unauthorized. The key may not be activated yet.", file=sys.stderr)
+            print("[ERROR] New OpenWeather API keys can take up to 2 hours to activate.", file=sys.stderr)
+            print("[ERROR] Please wait for activation or check your API key.", file=sys.stderr)
+        elif "403" in str(errors[0]) or "Forbidden" in str(errors[0]):
+            print("[ERROR] API key forbidden. The key may be invalid or expired.", file=sys.stderr)
+        
+        # If all cells failed, don't overwrite existing file
+        if len(feats) == 0:
+            if OUT.exists():
+                print(f"[WARN] All fetches failed. Keeping existing {OUT} to preserve data.", file=sys.stderr)
+                return
+            else:
+                print(f"[ERROR] All fetches failed and no existing file. Creating empty file.", file=sys.stderr)
+    
     OUT.write_text(json.dumps({"type":"FeatureCollection","features":feats}, ensure_ascii=False), encoding="utf-8")
-    print(f"[OK] saved {OUT} ({len(feats)} features)")
+    print(f"[OK] saved {OUT} ({len(feats)} features, {len(errors)} errors)")
 
 if __name__=="__main__":
     main()
