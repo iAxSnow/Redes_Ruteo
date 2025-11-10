@@ -83,19 +83,41 @@ python loaders/load_ways_nodes.py
 ### 2. Cargar Amenazas (Opcional)
 **Nota**: Las amenazas son opcionales. El sistema puede calcular rutas basadas solo en distancia sin necesidad de cargar amenazas. Las amenazas permiten calcular rutas considerando probabilidades de falla.
 
+#### 🔴 IMPORTANTE: Recolección de Datos Reales
+
+Para producción, necesitas **datos reales de Waze**. El sistema tiene una estrategia de 3 niveles:
+1. **APIs de Waze** (preferido, pero a menudo fallan)
+2. **WebDriver con Chrome** (confiable para datos reales) ← **RECOMENDADO**
+3. **Datos de muestra** (solo para desarrollo/testing)
+
+#### Configurar WebDriver para Datos Reales
+
 ```bash
-# Extraer amenazas de Waze
-# Usa API → WebDriver (si disponible) → datos de muestra como fallback
+# 1. Instalar Chrome/ChromeDriver
+sudo apt-get update
+sudo apt-get install -y chromium-browser chromium-chromedriver
+
+# 2. Instalar Selenium
+pip install selenium
+
+# 3. Verificar configuración (EJECUTA ESTO PRIMERO)
+python scripts/diagnose_webdriver.py
+
+# 4. Si todo está OK, recolectar datos reales de Waze
 python amenazas/waze_incidents_parallel_adaptive.py
 
-# Para habilitar WebDriver: pip install selenium
-# Ver WEBDRIVER_SETUP.md para instrucciones completas
-
-# Cargar amenazas en base de datos
+# 5. Cargar amenazas en base de datos
 python loaders/load_threats_waze.py
+```
 
-# Otros extractores de amenazas (todos opcionales)
+**Si `diagnose_webdriver.py` reporta errores**, sigue las soluciones indicadas. Ver `WEBDRIVER_SETUP.md` para troubleshooting detallado.
+
+#### Otros Extractores de Amenazas
+
+```bash
+# Traffic calming (reductores de velocidad)
 python amenazas/traffic_calming_as_threats_parallel.py
+python loaders/load_threats_calming.py
 
 # OpenWeather (requiere OPENWEATHER_KEY en .env y clave activada)
 python amenazas/weather_openweather_parallel.py

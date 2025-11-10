@@ -1,6 +1,24 @@
 # WebDriver Setup for Waze Data Collection
 
-El script de recolección de Waze (`amenazas/waze_incidents_parallel_adaptive.py`) ahora incluye soporte para Selenium WebDriver como método de respaldo cuando las APIs de Waze fallan.
+## 🔴 IMPORTANTE: WebDriver es Necesario para Datos Reales
+
+**Para producción, WebDriver NO es opcional**. Las APIs de Waze públicas frecuentemente fallan o están bloqueadas. WebDriver es el método **más confiable** para recolectar datos reales de incidentes de Waze.
+
+El script de recolección de Waze (`amenazas/waze_incidents_parallel_adaptive.py`) usa una estrategia de 3 niveles:
+
+1. **APIs de Waze** (intenta primero, pero a menudo falla)
+2. **WebDriver con Selenium** ← **MÉTODO RECOMENDADO PARA DATOS REALES**
+3. **Datos de muestra** (solo fallback para desarrollo)
+
+## Diagnóstico Rápido
+
+**ANTES de instalar**, verifica tu configuración actual:
+
+```bash
+python scripts/diagnose_webdriver.py
+```
+
+Este script te dirá exactamente qué falta y cómo arreglarlo.
 
 ## Requisitos
 
@@ -64,6 +82,25 @@ Selenium 4.x+ puede descargar ChromeDriver automáticamente.
    ```
 
 ## Verificación
+
+### Método 1: Script de Diagnóstico (Recomendado)
+
+Usa el script de diagnóstico automático:
+
+```bash
+python scripts/diagnose_webdriver.py
+```
+
+Este script verifica:
+- ✓ Chrome/Chromium instalado
+- ✓ ChromeDriver instalado
+- ✓ Selenium instalado
+- ✓ WebDriver puede iniciar
+- ✓ Navegación funciona
+
+**Si algo falla, el script te dirá exactamente cómo arreglarlo.**
+
+### Método 2: Prueba Manual
 
 Prueba que WebDriver funciona:
 
@@ -164,12 +201,31 @@ sudo apt-get upgrade chromium-browser chromium-chromedriver
 - El sistema automáticamente usará sample data si WebDriver toma demasiado tiempo
 
 ### "El sistema funciona pero no recoge datos de Waze en tiempo real"
-**Esto es normal si**:
-- Chrome/ChromeDriver no están instalados → Usa sample data
-- APIs de Waze están caídas → Usa sample data
-- WebDriver falla → Usa sample data
 
-**El sistema está diseñado para funcionar sin WebDriver**. Los datos de muestra permiten desarrollo y testing sin necesidad de configurar Chrome.
+**🔴 IMPORTANTE**: Si ves este mensaje en los logs:
+```
+[OK] Using sample data from amenazas_muestra.geojson
+```
+
+**Esto significa que NO estás recolectando datos reales**. Causas comunes:
+- Chrome/ChromeDriver no están instalados
+- Chrome/ChromeDriver tienen versiones incompatibles
+- APIs de Waze están caídas Y WebDriver falla
+
+**Para PRODUCCIÓN, DEBES arreglar WebDriver**. Los datos de muestra son solo para desarrollo/testing.
+
+**Acción requerida**:
+1. Ejecuta: `python scripts/diagnose_webdriver.py`
+2. Sigue las soluciones indicadas
+3. Verifica que el diagnóstico pase todos los checks
+4. Ejecuta nuevamente el script de Waze
+
+### "Quiero solo desarrollo/testing (sin datos reales)"
+
+Si solo necesitas probar el sistema sin datos reales:
+- El sistema automáticamente usará sample data si WebDriver falla
+- Puedes usar `WAZE_SIMULATE=true` en .env para generar datos simulados
+- Esto es SOLO para desarrollo, NO para producción
 
 ## Variables de Entorno
 
