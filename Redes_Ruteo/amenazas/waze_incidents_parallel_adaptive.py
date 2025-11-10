@@ -3,12 +3,15 @@
 """
 Waze fetcher adaptativo:
 - Usa la API moderna de Waze Live Map (tile-based system)
-- Si las APIs fallan, intenta scraping del live map webpage
+- Si las APIs fallan, intenta scraping con Selenium WebDriver
+- Si WebDriver falla, usa datos de muestra como respaldo final
 - Sistema de tiles basado en zoom levels
 - Si un tile devuelve 404 o error, lo subdivide en 4 (hasta profundidad 2)
 - Extrae alerts, jams e irregularities
 
 Salida: amenazas/waze_incidents.geojson
+
+Requiere: selenium>=4.15.2 para WebDriver (opcional, usa fallback si no está disponible)
 """
 import os, json, sys, time, re
 from pathlib import Path
@@ -125,8 +128,145 @@ def load_sample_data()->Dict[str,Any]:
     
     return {"alerts": [], "jams": [], "irregularities": []}
 
+def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
+    """Fetch Waze data using Selenium WebDriver for dynamic content"""
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.common.exceptions import TimeoutException, WebDriverException
+        
+        # Calculate center point for the live map URL
+        center_lat = (s + n) / 2
+        center_lon = (w + e) / 2
+        zoom = 13  # Good zoom level for data collection
+        
+        # Configure Chrome options for headless mode
+        chrome_options = Options()
+        chrome_options.add_argument('--headless')
+        chrome_options.add_argument('--no-sandbox')
+        chrome_options.add_argument('--disable-dev-shm-usage')
+        chrome_options.add_argument('--disable-gpu')
+        chrome_options.add_argument('--disable-software-rasterizer')
+        chrome_options.add_argument('--disable-extensions')
+        chrome_options.add_argument(f'user-agent={UA["User-Agent"]}')
+        chrome_options.add_argument('--window-size=1920,1080')
+        
+        sys.stderr.write(f"[info] Starting WebDriver for tile {s:.4f},{w:.4f},{n:.4f},{e:.4f}\n")
+        
+        # Initialize WebDriver
+        driver = webdriver.Chrome(options=chrome_options)
+        driver.set_page_load_timeout(TIMEOUT)
+        
+        try:
+            # Navigate to Waze live map
+            live_map_url = f"https://www.waze.com/live-map?zoom={zoom}&lat={center_lat}&lon={center_lon}"
+            driver.get(live_map_url)
+            
+            # Wait for the map to load and data to be available
+            wait = WebDriverWait(driver, 15)
+            time.sleep(3)  # Additional wait for dynamic data loading
+            
+            # Try to extract data from the page
+            # Method 1: Check for embedded JSON in script tags or window objects
+            script = """
+                try {
+                    // Try to find data in various places
+                    if (window.__NEXT_DATA__ && window.__NEXT_DATA__.props) {
+                        return JSON.stringify(window.__NEXT_DATA__.props);
+                    }
+                    if (window.__REDUX_STATE__) {
+                        return JSON.stringify(window.__REDUX_STATE__);
+                    }
+                    // Try to get from any exposed data objects
+                    if (window.WazeData) {
+                        return JSON.stringify(window.WazeData);
+                    }
+                    return null;
+                } catch(e) {
+                    return null;
+                }
+            """
+            
+            data_json = driver.execute_script(script)
+            
+            if data_json:
+                data = json.loads(data_json)
+                
+                # Extract alerts, jams, and irregularities from the data structure
+                extracted_data = {"alerts": [], "jams": [], "irregularities": []}
+                
+                # Navigate through the data structure to find alerts/jams
+                def extract_from_dict(obj, depth=0):
+                    if depth > 10:  # Prevent infinite recursion
+                        return
+                    
+                    if isinstance(obj, dict):
+                        # Look for arrays that might contain alerts or jams
+                        if "alerts" in obj and isinstance(obj["alerts"], list):
+                            extracted_data["alerts"].extend(obj["alerts"])
+                        if "jams" in obj and isinstance(obj["jams"], list):
+                            extracted_data["jams"].extend(obj["jams"])
+                        if "irregularities" in obj and isinstance(obj["irregularities"], list):
+                            extracted_data["irregularities"].extend(obj["irregularities"])
+                        
+                        # Recursively search
+                        for value in obj.values():
+                            extract_from_dict(value, depth + 1)
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            extract_from_dict(item, depth + 1)
+                
+                extract_from_dict(data)
+                
+                # Filter by bounding box
+                filtered_data = {"alerts": [], "jams": [], "irregularities": []}
+                
+                for alert in extracted_data.get("alerts", []):
+                    loc = alert.get("location", {})
+                    lat = loc.get("y") or loc.get("lat")
+                    lon = loc.get("x") or loc.get("lon")
+                    if lat and lon and s <= lat <= n and w <= lon <= e:
+                        filtered_data["alerts"].append(alert)
+                
+                for jam in extracted_data.get("jams", []):
+                    line = jam.get("line", [])
+                    if any(s <= p.get("y", 0) <= n and w <= p.get("x", 0) <= e for p in line):
+                        filtered_data["jams"].append(jam)
+                
+                for irr in extracted_data.get("irregularities", []):
+                    seg = irr.get("seg", {})
+                    lat = seg.get("y") or seg.get("lat")
+                    lon = seg.get("x") or seg.get("lon")
+                    if lat and lon and s <= lat <= n and w <= lon <= e:
+                        filtered_data["irregularities"].append(irr)
+                
+                if any(filtered_data.values()):
+                    sys.stderr.write(f"[ok] WebDriver extracted {len(filtered_data['alerts'])} alerts, {len(filtered_data['jams'])} jams\n")
+                    return filtered_data
+            
+            # If no data found, return empty
+            sys.stderr.write(f"[warn] WebDriver could not extract data from page\n")
+            raise RuntimeError("No data extracted via WebDriver")
+            
+        finally:
+            driver.quit()
+    
+    except ImportError as e:
+        sys.stderr.write(f"[warn] Selenium not available: {e}\n")
+        raise RuntimeError(f"Selenium not installed: {e}")
+    except WebDriverException as e:
+        sys.stderr.write(f"[warn] WebDriver error: {e}\n")
+        raise RuntimeError(f"Browser automation failed (WebDriver): {e}")
+    except Exception as e:
+        sys.stderr.write(f"[warn] WebDriver fetch failed: {e}\n")
+        raise RuntimeError(f"WebDriver fetch failed: {e}")
+
 def fetch_box(s,w,n,e)->Dict[str,Any]:
-    """Fetch Waze data for a bounding box using modern API endpoints, with sample data as fallback"""
+    """Fetch Waze data for a bounding box using modern API endpoints, WebDriver, and sample data as fallback"""
     # If simulation mode is enabled, return simulated data
     if SIMULATE:
         return generate_simulated_data(s,w,n,e)
@@ -172,8 +312,18 @@ def fetch_box(s,w,n,e)->Dict[str,Any]:
                 last_error = f"{base_url} -> {str(ex)}"
                 time.sleep(0.5 * (k + 1))
     
-    # If all API endpoints failed, use sample data as fallback
-    sys.stderr.write(f"[info] All API endpoints failed, using sample data as fallback\n")
+    # If all API endpoints failed, try WebDriver scraping
+    sys.stderr.write(f"[info] API endpoints failed, trying WebDriver scraping...\n")
+    try:
+        webdriver_data = fetch_with_webdriver(s, w, n, e)
+        if webdriver_data and (webdriver_data.get("alerts") or webdriver_data.get("jams")):
+            return webdriver_data
+    except Exception as ex:
+        last_error = f"WebDriver also failed: {ex}"
+        sys.stderr.write(f"[warn] {last_error}\n")
+    
+    # If WebDriver also failed, use sample data as final fallback
+    sys.stderr.write(f"[info] Using sample data as final fallback\n")
     sample_data = load_sample_data()
     if sample_data and (sample_data.get("alerts") or sample_data.get("jams")):
         return sample_data
