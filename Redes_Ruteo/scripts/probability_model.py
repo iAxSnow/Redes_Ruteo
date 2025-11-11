@@ -230,16 +230,16 @@ def calculate_failure_probabilities(conn):
                     %(prob)s * 0.3
                 )
                 FROM (
-                    SELECT DISTINCT w2.gid
+                    SELECT DISTINCT w2.id
                     FROM rr.ways w2
                     JOIN rr.amenazas_calming t
                     ON ST_DWithin(
                         w2.geom::geography,
                         t.geom::geography,
-                        %(radius)s
+                        %(radius)
                     )
                 ) AS affected_ways
-                WHERE w.gid = affected_ways.gid
+                WHERE w.id = affected_ways.id
             """, {
                 'prob': FAILURE_PROBABILITY,
                 'radius': INFLUENCE_RADIUS_M

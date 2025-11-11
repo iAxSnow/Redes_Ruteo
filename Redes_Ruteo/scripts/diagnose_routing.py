@@ -59,11 +59,11 @@ def check_extensions(conn):
     
     # Check PostGIS
     cur.execute("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'postgis')")
-    postgis_installed = cur.fetchone()[0]
+    postgis_installed = cur.fetchone() is not None
     
     if postgis_installed:
         cur.execute("SELECT PostGIS_Version()")
-        version = cur.fetchone()[0]
+        version = cur.fetchone() is not None
         print(f"✓ PostGIS instalado: {version}")
     else:
         print("✗ PostGIS NO instalado")
@@ -72,11 +72,11 @@ def check_extensions(conn):
     
     # Check pgRouting
     cur.execute("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pgrouting')")
-    pgrouting_installed = cur.fetchone()[0]
+    pgrouting_installed = cur.fetchone() is not None
     
     if pgrouting_installed:
         cur.execute("SELECT pgr_version()")
-        version = cur.fetchone()[0]
+        version = cur.fetchone() is not None
         print(f"✓ pgRouting instalado: {version}")
     else:
         print("✗ pgRouting NO instalado")
@@ -96,7 +96,7 @@ def check_schema(conn):
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
     cur.execute("SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'rr')")
-    schema_exists = cur.fetchone()[0]
+    schema_exists = cur.fetchone() is not None
     
     if schema_exists:
         print("✓ Esquema 'rr' existe")
@@ -137,7 +137,7 @@ def check_tables(conn):
             )
         """, (schema, table_name))
         
-        table_exists = cur.fetchone()[0]
+        table_exists = cur.fetchone() is not None
         
         if table_exists:
             # Count rows
@@ -182,7 +182,7 @@ def check_topology(conn):
             )
         """)
         
-        vertices_exist = cur.fetchone()[0]
+        vertices_exist = cur.fetchone() is not None
         
         if not vertices_exist:
             print("✗ Tabla ways_vertices_pgr NO EXISTE")
@@ -230,7 +230,7 @@ def check_topology(conn):
             )
         """)
         
-        geom_exists = cur.fetchone()[0]
+        geom_exists = cur.fetchone() is not None
         
         if not geom_exists:
             print("⚠ Columna 'geom' NO existe en ways_vertices_pgr")
@@ -341,7 +341,7 @@ def check_threat_tables(conn):
             )
         """, (schema, table_name))
         
-        table_exists = cur.fetchone()[0]
+        table_exists = cur.fetchone() is not None
         
         if table_exists:
             cur.execute(f"SELECT COUNT(*) as count FROM {table}")
@@ -361,7 +361,7 @@ def check_threat_tables(conn):
         )
     """)
     
-    fail_prob_exists = cur.fetchone()[0]
+    fail_prob_exists = cur.fetchone() is not None
     
     if fail_prob_exists:
         cur.execute("SELECT COUNT(*) as count FROM rr.ways WHERE fail_prob IS NOT NULL")
