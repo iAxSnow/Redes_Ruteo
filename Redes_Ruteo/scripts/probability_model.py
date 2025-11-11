@@ -174,7 +174,7 @@ def calculate_failure_probabilities(conn):
         # Update ways within influence radius of threats (from all sources)
         print(f"\nCalculating probabilities for ways (radius: {INFLUENCE_RADIUS_M}m)...")
         
-        # Process Waze threats
+        # Process Waze threats (optimized with JOIN)
         if waze_count > 0:
             cur.execute("""
                 UPDATE rr.ways w
@@ -182,15 +182,17 @@ def calculate_failure_probabilities(conn):
                     COALESCE(w.fail_prob, 0.0),
                     %(prob)s
                 )
-                WHERE EXISTS (
-                    SELECT 1
-                    FROM rr.amenazas_waze t
-                    WHERE ST_DWithin(
-                        w.geom::geography,
+                FROM (
+                    SELECT DISTINCT w2.gid
+                    FROM rr.ways w2
+                    JOIN rr.amenazas_waze t
+                    ON ST_DWithin(
+                        w2.geom::geography,
                         t.geom::geography,
                         %(radius)s
                     )
-                )
+                ) AS affected_ways
+                WHERE w.gid = affected_ways.gid
             """, {
                 'prob': FAILURE_PROBABILITY,
                 'radius': INFLUENCE_RADIUS_M
@@ -268,7 +270,7 @@ def calculate_failure_probabilities(conn):
             if cur.fetchone():
                 print(f"\nCalculating probabilities for vertices (radius: {INFLUENCE_RADIUS_M}m)...")
                 
-                # Process Waze threats for vertices
+                # Process Waze threats for vertices (optimized with JOIN)
                 if waze_count > 0:
                     cur.execute("""
                         UPDATE rr.ways_vertices_pgr v
@@ -276,15 +278,17 @@ def calculate_failure_probabilities(conn):
                             COALESCE(v.fail_prob, 0.0),
                             %(prob)s
                         )
-                        WHERE EXISTS (
-                            SELECT 1
-                            FROM rr.amenazas_waze t
-                            WHERE ST_DWithin(
-                                v.geom::geography,
+                        FROM (
+                            SELECT DISTINCT v2.id
+                            FROM rr.ways_vertices_pgr v2
+                            JOIN rr.amenazas_waze t
+                            ON ST_DWithin(
+                                v2.geom::geography,
                                 t.geom::geography,
                                 %(radius)s
                             )
-                        )
+                        ) AS affected_vertices
+                        WHERE v.id = affected_vertices.id
                     """, {
                         'prob': FAILURE_PROBABILITY,
                         'radius': INFLUENCE_RADIUS_M
@@ -311,7 +315,7 @@ def calculate_failure_probabilities(conn):
                     vertices_weather = cur.rowcount
                     print(f"✓ Updated {vertices_weather} vertices based on Weather threats")
                 
-                # Process Traffic Calming threats for vertices
+                # Process Traffic Calming threats for vertices (optimized with JOIN)
                 if calming_count > 0:
                     cur.execute("""
                         UPDATE rr.ways_vertices_pgr v
@@ -319,15 +323,17 @@ def calculate_failure_probabilities(conn):
                             COALESCE(v.fail_prob, 0.0),
                             %(prob)s * 0.3
                         )
-                        WHERE EXISTS (
-                            SELECT 1
-                            FROM rr.amenazas_calming t
-                            WHERE ST_DWithin(
-                                v.geom::geography,
+                        FROM (
+                            SELECT DISTINCT v2.id
+                            FROM rr.ways_vertices_pgr v2
+                            JOIN rr.amenazas_calming t
+                            ON ST_DWithin(
+                                v2.geom::geography,
                                 t.geom::geography,
                                 %(radius)s
                             )
-                        )
+                        ) AS affected_vertices
+                        WHERE v.id = affected_vertices.id
                     """, {
                         'prob': FAILURE_PROBABILITY,
                         'radius': INFLUENCE_RADIUS_M
