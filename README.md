@@ -48,6 +48,21 @@ psql -U postgres -h localhost -d rr -f schema.sql
 pip install -r requirements.txt
 ```
 
+4. **Verificar configuración del sistema de ruteo**
+```bash
+# Este script diagnostica problemas comunes de configuración
+python scripts/diagnose_routing.py
+```
+
+El script de diagnóstico verifica:
+- ✓ Conexión a la base de datos
+- ✓ Extensiones PostGIS y pgRouting instaladas
+- ✓ Tablas y datos cargados correctamente
+- ✓ Topología de pgRouting creada
+- ✓ Funcionalidad de ruteo
+
+Si el diagnóstico indica problemas, sigue las soluciones sugeridas.
+
 4. **Configurar variables de entorno**
 Crear archivo `.env` (ver `.env.example` para referencia completa):
 ```env
