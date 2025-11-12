@@ -15,6 +15,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 SITE_DATA_DIR="$PROJECT_ROOT/site/data"
 
+# ----- INICIO DE LA CORRECCIÓN 1: Exportar variables -----
+# Exportar variables para que sean visibles por los procesos de Python
+export SCRIPT_DIR
+export PROJECT_ROOT
+# ----- FIN DE LA CORRECCIÓN 1 -----
+
 # Colors for output
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -32,7 +38,7 @@ mkdir -p "$SITE_DATA_DIR"
 
 # Check if PostgreSQL connection works
 echo -e "${YELLOW}[1/4]${NC} Verificando conexión a la base de datos..."
-if ! python3 -c "import psycopg2, os; from dotenv import load_dotenv; load_dotenv(); conn = psycopg2.connect(host=os.getenv('PGHOST','localhost'), port=int(os.getenv('PGPORT','5432')), dbname=os.getenv('PGDATABASE','rr'), user=os.getenv('PGUSER','postgres'), password=os.getenv('PGPASSWORD','postgres')); conn.close()" 2>/dev/null; then
+if ! python3 -c "import psycopg2, os; from dotenv import load_dotenv; load_dotenv(dotenv_path=os.path.join(os.environ['PROJECT_ROOT'], '.env')); conn = psycopg2.connect(host=os.getenv('PGHOST','localhost'), port=int(os.getenv('PGPORT','5432')), dbname=os.getenv('PGDATABASE','rr'), user=os.getenv('PGUSER','postgres'), password=os.getenv('PGPASSWORD','postgres')); conn.close()" 2>/dev/null; then
     echo -e "${RED}[ERROR]${NC} No se pudo conectar a la base de datos PostgreSQL"
     echo -e "         Verifica tus credenciales en el archivo .env"
     exit 1
@@ -49,7 +55,15 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
-load_dotenv()
+# ----- INICIO DE LA CORRECCIÓN 2: Carga explícita de .env -----
+# No usar load_dotenv() mágico, especificar la ruta que viene del bash
+project_root = os.environ.get('PROJECT_ROOT')
+if project_root:
+    load_dotenv(dotenv_path=Path(project_root) / '.env')
+else:
+    print("Advertencia: PROJECT_ROOT no está seteado. dotenv podría fallar.")
+    load_dotenv()
+# ----- FIN DE LA CORRECCIÓN 2 -----
 
 PGHOST = os.getenv("PGHOST", "localhost")
 PGPORT = int(os.getenv("PGPORT", "5432"))
@@ -57,7 +71,11 @@ PGDATABASE = os.getenv("PGDATABASE", "rr")
 PGUSER = os.getenv("PGUSER", "postgres")
 PGPASSWORD = os.getenv("PGPASSWORD", "postgres")
 
-OUT = Path(__file__).resolve().parents[1] / "site" / "data" / "waze_threats.geojson"
+# ----- INICIO DE LA CORRECCIÓN 3: Arreglar lógica de Path -----
+# Usar SCRIPT_DIR (que ahora está exportado) en lugar de __file__
+script_dir = Path(os.environ.get('SCRIPT_DIR'))
+OUT = script_dir.parent / "site" / "data" / "waze_threats.geojson"
+# ----- FIN DE LA CORRECCIÓN 3 -----
 OUT.parent.mkdir(parents=True, exist_ok=True)
 
 SQL = """
@@ -89,12 +107,8 @@ try:
             row = cur.fetchone()
             fc = row["fc"]
     
-    # Get actual script directory from environment
-    script_dir = Path(os.environ.get('SCRIPT_DIR', Path(__file__).resolve().parent))
-    out_path = script_dir.parent / "site" / "data" / "waze_threats.geojson"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    out_path.write_text(json.dumps(fc, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Usar la variable OUT definida arriba
+    OUT.write_text(json.dumps(fc, ensure_ascii=False, indent=2), encoding="utf-8")
     count = len(fc.get('features', []))
     print(f"✓ Exportadas {count} amenazas de Waze")
 except Exception as e:
@@ -111,7 +125,14 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
-load_dotenv()
+# ----- INICIO DE LA CORRECCIÓN 2: Carga explícita de .env -----
+project_root = os.environ.get('PROJECT_ROOT')
+if project_root:
+    load_dotenv(dotenv_path=Path(project_root) / '.env')
+else:
+    print("Advertencia: PROJECT_ROOT no está seteado. dotenv podría fallar.")
+    load_dotenv()
+# ----- FIN DE LA CORRECCIÓN 2 -----
 
 PGHOST = os.getenv("PGHOST", "localhost")
 PGPORT = int(os.getenv("PGPORT", "5432"))
@@ -147,8 +168,10 @@ try:
             row = cur.fetchone()
             fc = row["fc"]
     
-    script_dir = Path(os.environ.get('SCRIPT_DIR', Path(__file__).resolve().parent))
+    # ----- INICIO DE LA CORRECCIÓN 3: Arreglar lógica de Path -----
+    script_dir = Path(os.environ.get('SCRIPT_DIR'))
     out_path = script_dir.parent / "site" / "data" / "weather_threats.geojson"
+    # ----- FIN DE LA CORRECCIÓN 3 -----
     out_path.parent.mkdir(parents=True, exist_ok=True)
     
     out_path.write_text(json.dumps(fc, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -168,7 +191,14 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
-load_dotenv()
+# ----- INICIO DE LA CORRECCIÓN 2: Carga explícita de .env -----
+project_root = os.environ.get('PROJECT_ROOT')
+if project_root:
+    load_dotenv(dotenv_path=Path(project_root) / '.env')
+else:
+    print("Advertencia: PROJECT_ROOT no está seteado. dotenv podría fallar.")
+    load_dotenv()
+# ----- FIN DE LA CORRECCIÓN 2 -----
 
 PGHOST = os.getenv("PGHOST", "localhost")
 PGPORT = int(os.getenv("PGPORT", "5432"))
@@ -201,8 +231,10 @@ try:
             row = cur.fetchone()
             fc = row["fc"]
     
-    script_dir = Path(os.environ.get('SCRIPT_DIR', Path(__file__).resolve().parent))
+    # ----- INICIO DE LA CORRECCIÓN 3: Arreglar lógica de Path -----
+    script_dir = Path(os.environ.get('SCRIPT_DIR'))
     out_path = script_dir.parent / "site" / "data" / "calming_threats.geojson"
+    # ----- FIN DE LA CORRECCIÓN 3 -----
     out_path.parent.mkdir(parents=True, exist_ok=True)
     
     out_path.write_text(json.dumps(fc, ensure_ascii=False, indent=2), encoding="utf-8")

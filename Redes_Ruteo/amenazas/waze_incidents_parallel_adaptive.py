@@ -13,8 +13,7 @@ Salida: amenazas/waze_incidents.geojson
 
 Requiere: 
   - selenium>=4.15.2 para WebDriver
-  - Firefox y GeckoDriver: sudo apt-get install firefox firefox-geckodriver
-  (opcional, usa fallback si no está disponible)
+  - Firefox y GeckoDriver: Sigue la guía de instalación manual (PPA de Mozilla + descarga de geckodriver)
 """
 import os, json, sys, time, re
 from pathlib import Path
@@ -154,11 +153,10 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
         firefox_options.set_preference('permissions.default.image', 2)  # Disable images for faster loading
         firefox_options.set_preference('dom.webnotifications.enabled', False)  # Disable notifications
         
-        # Auto-detect Firefox binary location (support firefox and firefox-esr)
-        # Check absolute paths first (more reliable)
+        # Auto-detect Firefox binary location (prioritize esr)
         firefox_paths = [
-            '/usr/bin/firefox',
-            '/usr/bin/firefox-esr',
+            '/usr/bin/firefox-esr', # <-- Prioridad #1 (PPA de Mozilla)
+            '/usr/bin/firefox',     # <-- Paquete dummy de snap (malo)
             '/snap/bin/firefox',
             '/usr/local/bin/firefox',
             '/usr/local/bin/firefox-esr'
@@ -177,9 +175,8 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
                 except (FileNotFoundError, subprocess.TimeoutExpired, Exception) as e:
                     continue
         
-        # If absolute path not found, try command in PATH
         if not firefox_binary:
-            for cmd in ['firefox', 'firefox-esr']:
+            for cmd in ['firefox-esr', 'firefox']: # Prioritize esr
                 try:
                     import subprocess
                     result = subprocess.run(['which', cmd], capture_output=True, text=True, timeout=2)
@@ -200,10 +197,9 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
         
         sys.stderr.write(f"[info] Starting Firefox WebDriver for tile {s:.4f},{w:.4f},{n:.4f},{e:.4f}\n")
         
-        # Configure GeckoDriver service to avoid auto-download attempts
+        # Configure GeckoDriver service
         service = None
         try:
-            # Try to find geckodriver in PATH
             import subprocess
             result = subprocess.run(['which', 'geckodriver'], capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
@@ -212,9 +208,8 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
                     service = Service(executable_path=geckodriver_path)
                     sys.stderr.write(f"[info] Using GeckoDriver at: {geckodriver_path}\n")
         except Exception:
-            pass
+            pass # Fallback to Selenium finding it in PATH
         
-        # Initialize Firefox WebDriver with better error handling
         try:
             if service:
                 driver = webdriver.Firefox(service=service, options=firefox_options)
@@ -226,11 +221,10 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
             error_msg = str(e)
             if "geckodriver" in error_msg.lower():
                 sys.stderr.write(f"[ERROR] GeckoDriver not found or incompatible.\n")
-                sys.stderr.write(f"[ERROR] Install: sudo apt-get install firefox-geckodriver\n")
+                sys.stderr.write(f"[ERROR] Install: (run manual geckodriver install script)\n")
             elif "Firefox" in error_msg or "firefox" in error_msg.lower():
                 sys.stderr.write(f"[ERROR] Firefox not properly installed or can't start.\n")
-                sys.stderr.write(f"[ERROR] Install Firefox: sudo apt-get install firefox\n")
-                sys.stderr.write(f"[ERROR] Or Firefox ESR: sudo apt-get install firefox-esr\n")
+                sys.stderr.write(f"[ERROR] Install Firefox: (run PPA install script for firefox-esr)\n")
             else:
                 sys.stderr.write(f"[ERROR] WebDriver session error: {error_msg}\n")
             raise RuntimeError(f"Firefox not available or misconfigured. Using fallback data.")
@@ -238,108 +232,100 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
             error_msg = str(e)
             sys.stderr.write(f"[ERROR] Firefox WebDriver error: {error_msg}\n")
             if "geckodriver" in error_msg.lower():
-                sys.stderr.write(f"[ERROR] Install GeckoDriver: sudo apt-get install firefox-geckodriver\n")
+                sys.stderr.write(f"[ERROR] Install GeckoDriver: (run manual geckodriver install script)\n")
             raise RuntimeError(f"Firefox WebDriver failed. Using fallback data.")
         
         try:
-            # Navigate to Waze live map
             live_map_url = f"https://www.waze.com/live-map?zoom={zoom}&lat={center_lat}&lon={center_lon}"
             driver.get(live_map_url)
             
-            # Wait for the map to load and data to be available
-            wait = WebDriverWait(driver, 15)
-            time.sleep(3)  # Additional wait for dynamic data loading
+            # ----- INICIO DE LA CORRECCIÓN DE TIMING -----
+            # Esperar a que el tag <script id="__NEXT_DATA__"> exista.
+            # Este tag contiene el JSON con todos los datos de la página.
+            # Aumentamos el tiempo de espera a 20 segundos.
+            sys.stderr.write(f"[info] Waiting for __NEXT_DATA__ script tag (max 20s)...\n")
+            wait = WebDriverWait(driver, 20) # Aumentado a 20s
             
-            # Try to extract data from the page
-            # Method 1: Check for embedded JSON in script tags or window objects
-            # Updated to check multiple common data sources in Waze Live Map
-            script = r"""
-                try {
-                    // Try to find data in various places
-                    if (window.__NEXT_DATA__ && window.__NEXT_DATA__.props) {
-                        return JSON.stringify(window.__NEXT_DATA__.props);
-                    }
-                    if (window.__REDUX_STATE__) {
-                        return JSON.stringify(window.__REDUX_STATE__);
-                    }
-                    // Try to get from any exposed data objects
-                    if (window.WazeData) {
-                        return JSON.stringify(window.WazeData);
-                    }
-                    if (window.wazeMapData) {
-                        return JSON.stringify(window.wazeMapData);
-                    }
-                    // Check for data in script tags
-                    var scripts = document.getElementsByTagName('script');
-                    for (var i = 0; i < scripts.length; i++) {
-                        var content = scripts[i].textContent;
-                        if (content.includes('alerts') || content.includes('jams')) {
-                            // Try to extract JSON
-                            var jsonMatch = content.match(/(\{.*"alerts".*\})/);
-                            if (jsonMatch) {
-                                return jsonMatch[1];
-                            }
-                        }
-                    }
-                    return null;
-                } catch(e) {
-                    return null;
-                }
-            """
+            wait.until(EC.presence_of_element_located((By.ID, "__NEXT_DATA__")))
             
-            data_json = driver.execute_script(script)
-            
-            # If no data found, try alternative: parse page elements directly
+            sys.stderr.write(f"[info] __NEXT_DATA__ found. Waiting 2s for full render...\n")
+            time.sleep(2) # Pequeña espera extra por si acaso
+            # ----- FIN DE LA CORRECCIÓN DE TIMING -----
+
+            # Method 1: Get data from __NEXT_DATA__ script tag
+            data_json = None
+            try:
+                next_data_element = driver.find_element(By.ID, "__NEXT_DATA__")
+                data_json = next_data_element.get_attribute('innerHTML')
+                sys.stderr.write(f"[info] Extracted __NEXT_DATA__ (size: {len(data_json)})\n")
+            except Exception as e:
+                sys.stderr.write(f"[warn] Could not find or read __NEXT_DATA__: {e}\n")
+
+            # Method 2: Fallback to window.W.model
             if not data_json:
-                print("[info] Trying alternative extraction method...")
-                try:
-                    # Try to extract visible markers/data from DOM elements
-                    element_script = """
-                        try {
-                            var result = {alerts: [], jams: []};
-                            // Try to find map markers or data elements
-                            var markers = document.querySelectorAll('[data-alert], [data-jam], .alert-marker, .jam-marker');
-                            markers.forEach(function(m) {
-                                var data = m.getAttribute('data-alert') || m.getAttribute('data-jam');
-                                if (data) {
-                                    try {
-                                        var parsed = JSON.parse(data);
-                                        if (parsed.type === 'alert') result.alerts.push(parsed);
-                                        if (parsed.type === 'jam') result.jams.push(parsed);
-                                    } catch(e) {}
-                                }
-                            });
-                            return result.alerts.length > 0 || result.jams.length > 0 ? JSON.stringify(result) : null;
-                        } catch(e) {
-                            return null;
-                        }
-                    """
-                    data_json = driver.execute_script(element_script)
-                except Exception as e:
-                    print(f"[warn] Alternative extraction also failed: {e}")
-                    data_json = None
+                sys.stderr.write(f"[info] __NEXT_DATA__ empty, trying window.W.model...\n")
+                script = "return window.W && window.W.model ? JSON.stringify(window.W.model) : null;"
+                data_json = driver.execute_script(script)
+                if data_json:
+                    sys.stderr.write(f"[info] Extracted window.W.model (size: {len(data_json)})\n")
             
             if data_json:
-                data = json.loads(data_json)
+                # --- INICIO DE CORRECCIÓN: Parseo Robusto de JSON ---
+                data = data_json
+                # Bucle para manejar JSON doble o triple codificado
+                while isinstance(data, str):
+                    try:
+                        data = json.loads(data)
+                    except json.JSONDecodeError:
+                        sys.stderr.write(f"[warn] Fallo al decodificar fragmento JSON: {data[:100]}...\n")
+                        raise RuntimeError("Datos JSON inválidos desde WebDriver")
+                
+                if not isinstance(data, dict):
+                    raise RuntimeError("Los datos extraídos no son un diccionario (dict)")
+                # --- FIN DE CORRECCIÓN: Parseo Robusto de JSON ---
                 
                 # Extract alerts, jams, and irregularities from the data structure
                 extracted_data = {"alerts": [], "jams": [], "irregularities": []}
                 
-                # Navigate through the data structure to find alerts/jams
+                # Función recursiva para navegar el objeto JSON
                 def extract_from_dict(obj, depth=0):
-                    if depth > 10:  # Prevent infinite recursion
+                    if depth > 10:  # Prevenir recursión infinita
                         return
                     
                     if isinstance(obj, dict):
-                        # Look for arrays that might contain alerts or jams
-                        if "alerts" in obj and isinstance(obj["alerts"], list):
-                            extracted_data["alerts"].extend(obj["alerts"])
-                        if "jams" in obj and isinstance(obj["jams"], list):
-                            extracted_data["jams"].extend(obj["jams"])
-                        if "irregularities" in obj and isinstance(obj["irregularities"], list):
-                            extracted_data["irregularities"].extend(obj["irregularities"])
+                        # --- INICIO DE CORRECCIÓN: Lógica de extracción robusta ---
+                        try:
+                            if "alerts" in obj:
+                                alerts_data = obj["alerts"]
+                                if isinstance(alerts_data, list):
+                                    extracted_data["alerts"].extend([item for item in alerts_data if isinstance(item, dict)])
+                                elif isinstance(alerts_data, dict) and "objects" in alerts_data and isinstance(alerts_data["objects"], dict):
+                                    extracted_data["alerts"].extend([item for item in alerts_data["objects"].values() if isinstance(item, dict)])
+                                elif isinstance(alerts_data, dict):
+                                    extracted_data["alerts"].extend([item for item in alerts_data.values() if isinstance(item, dict)])
+
+                            if "jams" in obj:
+                                jams_data = obj["jams"]
+                                if isinstance(jams_data, list):
+                                    extracted_data["jams"].extend([item for item in jams_data if isinstance(item, dict)])
+                                elif isinstance(jams_data, dict) and "objects" in jams_data and isinstance(jams_data["objects"], dict):
+                                    extracted_data["jams"].extend([item for item in jams_data["objects"].values() if isinstance(item, dict)])
+                                elif isinstance(jams_data, dict):
+                                    extracted_data["jams"].extend([item for item in jams_data.values() if isinstance(item, dict)])
+
+                            if "irregularities" in obj:
+                                irr_data = obj["irregularities"]
+                                if isinstance(irr_data, list):
+                                    extracted_data["irregularities"].extend([item for item in irr_data if isinstance(item, dict)])
+                                elif isinstance(irr_data, dict) and "objects" in irr_data and isinstance(irr_data["objects"], dict):
+                                    extracted_data["irregularities"].extend([item for item in irr_data["objects"].values() if isinstance(item, dict)])
+                                elif isinstance(irr_data, dict):
+                                    extracted_data["irregularities"].extend([item for item in irr_data.values() if isinstance(item, dict)])
+                        except Exception as e:
+                            sys.stderr.write(f"[warn] Error menor durante extracción: {e}\n")
+                        # --- FIN DE CORRECCIÓN: Lógica de extracción robusta ---
                         
-                        # Recursively search
+                        # Búsqueda recursiva
                         for value in obj.values():
                             extract_from_dict(value, depth + 1)
                     elif isinstance(obj, list):
@@ -352,6 +338,7 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
                 filtered_data = {"alerts": [], "jams": [], "irregularities": []}
                 
                 for alert in extracted_data.get("alerts", []):
+                    # --- INICIO CORRECCIÓN: Filtrado robusto ---
                     loc = alert.get("location", {})
                     lat = loc.get("y") or loc.get("lat")
                     lon = loc.get("x") or loc.get("lon")
@@ -360,16 +347,17 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
                 
                 for jam in extracted_data.get("jams", []):
                     line = jam.get("line", [])
-                    if any(s <= p.get("y", 0) <= n and w <= p.get("x", 0) <= e for p in line):
+                    if any(s <= p.get("y", 0) <= n and w <= p.get("x", 0) <= e for p in line if isinstance(p, dict)):
                         filtered_data["jams"].append(jam)
                 
                 for irr in extracted_data.get("irregularities", []):
-                    seg = irr.get("seg", {})
+                    seg = irr.get("seg", {}) or irr.get("location", {})
                     lat = seg.get("y") or seg.get("lat")
                     lon = seg.get("x") or seg.get("lon")
                     if lat and lon and s <= lat <= n and w <= lon <= e:
                         filtered_data["irregularities"].append(irr)
-                
+                # --- FIN CORRECCIÓN: Filtrado robusto ---
+
                 if any(filtered_data.values()):
                     sys.stderr.write(f"[ok] WebDriver extracted {len(filtered_data['alerts'])} alerts, {len(filtered_data['jams'])} jams\n")
                     return filtered_data
@@ -425,7 +413,11 @@ def fetch_box(s,w,n,e)->Dict[str,Any]:
                         data = r.json()
                         # Check if we got valid data
                         if data and isinstance(data, dict):
-                            return data
+                            # Filtro extra, a veces la API devuelve datos vacíos
+                            if data.get("alerts") or data.get("jams") or data.get("irregularities"):
+                                return data
+                            else:
+                                last_error = "API returned empty (no alerts/jams)"
                     except Exception as je:
                         last_error = f"JSON parse error: {je}"
                         pass
@@ -447,8 +439,8 @@ def fetch_box(s,w,n,e)->Dict[str,Any]:
     except Exception as ex:
         last_error = str(ex)
         # Error messages already logged in fetch_with_webdriver
-        if "Chrome not available" in last_error or "WebDriver unavailable" in last_error:
-            sys.stderr.write(f"[info] WebDriver not available (Chrome/ChromeDriver issue). Falling back to sample data.\n")
+        if "WebDriver unavailable" in last_error:
+            sys.stderr.write(f"[info] WebDriver not available (Firefox/GeckoDriver issue). Falling back to sample data.\n")
         elif "Selenium not available" in last_error:
             sys.stderr.write(f"[info] Selenium not installed. Falling back to sample data.\n")
         else:
