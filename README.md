@@ -214,10 +214,6 @@ Las contribuciones son bienvenidas. Por favor:
 4. Push a la rama (`git push origin feature/AmazingFeature`)
 5. Abre un Pull Request
 
-## Licencia
-
-Este proyecto está bajo la Licencia MIT.
-
 ## Contacto
 
 Proyecto desarrollado para el curso de Redes y Ruteo, Universidad de Chile.
