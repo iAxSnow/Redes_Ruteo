@@ -385,8 +385,8 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
             driver.quit()
     
     except ImportError as e:
-        sys.stderr.write(f"[info] Selenium not installed. Install with: pip install selenium\n")
-        raise RuntimeError(f"Selenium not available. Using fallback data.")
+        sys.stderr.write(f"[info] selenium-wire not installed. Install with: pip install selenium-wire\n")
+        raise RuntimeError(f"selenium-wire not available. Using fallback data.")
     except (WebDriverException, SessionNotCreatedException) as e:
         # More specific error message already logged above
         raise RuntimeError(f"WebDriver unavailable. Using fallback data.")
@@ -456,8 +456,8 @@ def fetch_box(s,w,n,e)->Dict[str,Any]:
         # Error messages already logged in fetch_with_webdriver
         if "WebDriver unavailable" in last_error:
             sys.stderr.write(f"[info] WebDriver not available (Firefox/GeckoDriver issue). Falling back to sample data.\n")
-        elif "Selenium not available" in last_error:
-            sys.stderr.write(f"[info] Selenium not installed. Falling back to sample data.\n")
+        elif "selenium-wire not available" in last_error:
+            sys.stderr.write(f"[info] selenium-wire not installed. Falling back to sample data.\n")
         else:
             sys.stderr.write(f"[info] WebDriver scraping failed. Falling back to sample data.\n")
     
