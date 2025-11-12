@@ -155,33 +155,71 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
         firefox_options.set_preference('dom.webnotifications.enabled', False)  # Disable notifications
         
         # Auto-detect Firefox binary location (support firefox and firefox-esr)
+        # Check absolute paths first (more reliable)
         firefox_paths = [
             '/usr/bin/firefox',
             '/usr/bin/firefox-esr',
-            'firefox',
-            'firefox-esr'
+            '/snap/bin/firefox',
+            '/usr/local/bin/firefox',
+            '/usr/local/bin/firefox-esr'
         ]
         
         firefox_binary = None
         for path in firefox_paths:
-            try:
-                import subprocess
-                result = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=2)
-                if result.returncode == 0:
-                    firefox_binary = path
-                    sys.stderr.write(f"[info] Found Firefox at: {path}\n")
-                    break
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                continue
+            if os.path.exists(path) and os.access(path, os.X_OK):
+                try:
+                    import subprocess
+                    result = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=2)
+                    if result.returncode == 0 and 'firefox' in result.stdout.lower():
+                        firefox_binary = path
+                        sys.stderr.write(f"[info] Found Firefox at: {path}\n")
+                        break
+                except (FileNotFoundError, subprocess.TimeoutExpired, Exception) as e:
+                    continue
+        
+        # If absolute path not found, try command in PATH
+        if not firefox_binary:
+            for cmd in ['firefox', 'firefox-esr']:
+                try:
+                    import subprocess
+                    result = subprocess.run(['which', cmd], capture_output=True, text=True, timeout=2)
+                    if result.returncode == 0:
+                        path = result.stdout.strip()
+                        if path and os.path.exists(path):
+                            firefox_binary = path
+                            sys.stderr.write(f"[info] Found Firefox at: {path}\n")
+                            break
+                except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+                    continue
         
         if firefox_binary:
             firefox_options.binary_location = firefox_binary
+        else:
+            sys.stderr.write(f"[warn] Firefox binary not found. WebDriver may fail or try to download Firefox.\n")
+            sys.stderr.write(f"[warn] Install Firefox: sudo apt-get install firefox-esr\n")
         
         sys.stderr.write(f"[info] Starting Firefox WebDriver for tile {s:.4f},{w:.4f},{n:.4f},{e:.4f}\n")
         
+        # Configure GeckoDriver service to avoid auto-download attempts
+        service = None
+        try:
+            # Try to find geckodriver in PATH
+            import subprocess
+            result = subprocess.run(['which', 'geckodriver'], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                geckodriver_path = result.stdout.strip()
+                if geckodriver_path and os.path.exists(geckodriver_path):
+                    service = Service(executable_path=geckodriver_path)
+                    sys.stderr.write(f"[info] Using GeckoDriver at: {geckodriver_path}\n")
+        except Exception:
+            pass
+        
         # Initialize Firefox WebDriver with better error handling
         try:
-            driver = webdriver.Firefox(options=firefox_options)
+            if service:
+                driver = webdriver.Firefox(service=service, options=firefox_options)
+            else:
+                driver = webdriver.Firefox(options=firefox_options)
             driver.set_page_load_timeout(TIMEOUT)
             sys.stderr.write(f"[info] Firefox WebDriver started successfully\n")
         except SessionNotCreatedException as e:

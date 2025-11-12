@@ -146,16 +146,33 @@ def test_webdriver():
             print(f"✗ Error al crear sesión de WebDriver")
             print(f"\nError completo:\n{error_msg}\n")
             
-            if "geckodriver" in error_msg.lower():
+            if "binary is not a firefox executable" in error_msg.lower():
+                print("❌ PROBLEMA: El binario de Firefox no es válido o no se puede ejecutar")
+                print("\nCAUSA PROBABLE:")
+                print("  - Firefox no está instalado correctamente")
+                print("  - El binario no es ejecutable")
+                print("  - Selenium intentó descargar Firefox automáticamente (falló)")
+                print("\nSOLUCIÓN:")
+                print("  1. Instala Firefox o Firefox ESR:")
+                print("     sudo apt-get update")
+                print("     sudo apt-get install -y firefox-esr  # Recomendado")
+                print("     # O: sudo apt-get install -y firefox")
+                print("  2. Verifica la instalación:")
+                print("     which firefox-esr || which firefox")
+                print("     firefox-esr --version || firefox --version")
+                print("  3. Asegúrate de que GeckoDriver esté instalado:")
+                print("     sudo apt-get install -y firefox-geckodriver")
+            elif "geckodriver" in error_msg.lower():
                 print("❌ PROBLEMA: GeckoDriver no encontrado o incompatible")
                 print("\nSOLUCIÓN:")
                 print("  sudo apt-get update")
                 print("  sudo apt-get install -y firefox-geckodriver")
-            elif "firefox" in error_msg.lower():
-                print("❌ PROBLEMA: Firefox no puede iniciar")
+            elif "firefox" in error_msg.lower() or "404 not found" in error_msg.lower():
+                print("❌ PROBLEMA: Firefox no puede iniciar o no está disponible")
                 print("\nSOLUCIÓN:")
                 print("  sudo apt-get update")
-                print("  sudo apt-get install -y firefox")
+                print("  sudo apt-get install -y firefox-esr  # Recomendado")
+                print("  # O: sudo apt-get install -y firefox")
             else:
                 print("❌ PROBLEMA: Error desconocido al iniciar WebDriver")
                 print("\nVerifica el log completo arriba para más detalles")
