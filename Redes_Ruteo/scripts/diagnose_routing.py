@@ -59,11 +59,11 @@ def check_extensions(conn):
     
     # Check PostGIS
     cur.execute("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'postgis')")
-    postgis_installed = cur.fetchone() is not None
+    postgis_exists = cur.fetchone()['exists']
     
-    if postgis_installed:
+    if postgis_exists:
         cur.execute("SELECT PostGIS_Version()")
-        version = cur.fetchone() is not None
+        version = cur.fetchone()['postgis_version']
         print(f"✓ PostGIS instalado: {version}")
     else:
         print("✗ PostGIS NO instalado")
@@ -72,11 +72,11 @@ def check_extensions(conn):
     
     # Check pgRouting
     cur.execute("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pgrouting')")
-    pgrouting_installed = cur.fetchone() is not None
+    pgrouting_exists = cur.fetchone()['exists']
     
-    if pgrouting_installed:
+    if pgrouting_exists:
         cur.execute("SELECT pgr_version()")
-        version = cur.fetchone() is not None
+        version = cur.fetchone()['pgr_version']
         print(f"✓ pgRouting instalado: {version}")
     else:
         print("✗ pgRouting NO instalado")
@@ -84,7 +84,7 @@ def check_extensions(conn):
         print("  CREATE EXTENSION pgrouting;")
     
     cur.close()
-    return postgis_installed and pgrouting_installed
+    return postgis_exists and pgrouting_exists
 
 
 def check_schema(conn):
@@ -96,7 +96,7 @@ def check_schema(conn):
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
     cur.execute("SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'rr')")
-    schema_exists = cur.fetchone() is not None
+    schema_exists = cur.fetchone()['exists']
     
     if schema_exists:
         print("✓ Esquema 'rr' existe")
@@ -137,7 +137,7 @@ def check_tables(conn):
             )
         """, (schema, table_name))
         
-        table_exists = cur.fetchone() is not None
+        table_exists = cur.fetchone()['exists']
         
         if table_exists:
             # Count rows
@@ -182,7 +182,7 @@ def check_topology(conn):
             )
         """)
         
-        vertices_exist = cur.fetchone() is not None
+        vertices_exist = cur.fetchone()['exists']
         
         if not vertices_exist:
             print("✗ Tabla ways_vertices_pgr NO EXISTE")
@@ -230,7 +230,7 @@ def check_topology(conn):
             )
         """)
         
-        geom_exists = cur.fetchone() is not None
+        geom_exists = cur.fetchone()['exists']
         
         if not geom_exists:
             print("⚠ Columna 'geom' NO existe en ways_vertices_pgr")
@@ -285,17 +285,20 @@ def test_routing_query(conn):
         
         print(f"  Probando ruta de nodo {source} a nodo {target}...")
         
-        # Try routing query
+        # ----- INICIO DE LA CORRECCIÓN -----
+        # Usamos la vista 'rr.ways_routing' que ya tiene 'cost' y 'reverse_cost'
+        # Esto maneja calles 'oneway' correctamente y es más fiable.
         cur.execute("""
             SELECT 
                 r.seq, r.node, r.edge, r.cost, r.agg_cost
             FROM pgr_dijkstra(
-                'SELECT id, source, target, length_m as cost FROM rr.ways',
-                %s, %s, directed := false
+                'SELECT id, source, target, cost, reverse_cost FROM rr.ways_routing',
+                %s, %s
             ) r
             ORDER BY r.seq
             LIMIT 10
         """, (source, target))
+        # ----- FIN DE LA CORRECCIÓN -----
         
         route = cur.fetchall()
         
@@ -306,7 +309,7 @@ def test_routing_query(conn):
             return True
         else:
             print("⚠ Consulta ejecutada pero no encontró ruta")
-            print("  Esto puede ser normal si los nodos no están conectados")
+            print("  Esto puede ser normal si los nodos no están conectados (ej. islas)")
             cur.close()
             return True
             
@@ -341,7 +344,7 @@ def check_threat_tables(conn):
             )
         """, (schema, table_name))
         
-        table_exists = cur.fetchone() is not None
+        table_exists = cur.fetchone()['exists']
         
         if table_exists:
             cur.execute(f"SELECT COUNT(*) as count FROM {table}")
@@ -351,6 +354,8 @@ def check_threat_tables(conn):
             print(f"⚠ {description}: tabla no existe")
     
     # Check if fail_prob column exists in ways table
+    # ----- INICIO DE LA CORRECCIÓN -----
+    # Revertido a 'fail_prob' según la solicitud del usuario
     cur.execute("""
         SELECT EXISTS (
             SELECT 1 
@@ -361,7 +366,7 @@ def check_threat_tables(conn):
         )
     """)
     
-    fail_prob_exists = cur.fetchone() is not None
+    fail_prob_exists = cur.fetchone()['exists']
     
     if fail_prob_exists:
         cur.execute("SELECT COUNT(*) as count FROM rr.ways WHERE fail_prob IS NOT NULL")
@@ -376,6 +381,7 @@ def check_threat_tables(conn):
         print("\nSOLUCIÓN:")
         print("  ALTER TABLE rr.ways ADD COLUMN fail_prob NUMERIC;")
     
+    # ----- FIN DE LA CORRECCIÓN -----
     cur.close()
 
 
@@ -392,7 +398,13 @@ def main():
         sys.exit(1)
     
     # 2. Check extensions
-    extensions_ok = check_extensions(conn)
+    try:
+        extensions_ok = check_extensions(conn)
+    except KeyError as e:
+        print(f"✗ Error al verificar extensiones: {e}. Probablemente un problema de DictCursor.")
+        print("  Asegúrate de que las consultas en check_extensions usen ['exists'] y ['postgis_version']/['pgr_version']")
+        extensions_ok = False
+        
     if not extensions_ok:
         print("\n❌ Extensiones faltantes. Instala PostGIS y pgRouting primero")
         conn.close()
