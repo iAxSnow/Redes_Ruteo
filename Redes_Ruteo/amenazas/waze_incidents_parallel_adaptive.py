@@ -132,12 +132,24 @@ def load_sample_data()->Dict[str,Any]:
 
 def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
     """Fetch Waze data using Selenium-Wire to intercept API requests"""
+    # Check for selenium-wire availability first
     try:
         from seleniumwire import webdriver
+    except ImportError as e:
+        sys.stderr.write(f"[info] selenium-wire not installed. Install with: pip install selenium-wire\n")
+        raise RuntimeError(f"selenium-wire not available. Using fallback data.")
+    
+    # Check for selenium availability
+    try:
         from selenium.webdriver.firefox.options import Options
         from selenium.webdriver.firefox.service import Service
         from selenium.common.exceptions import TimeoutException, WebDriverException, SessionNotCreatedException
-        
+    except ImportError as e:
+        sys.stderr.write(f"[info] selenium package incomplete or missing module: {e}\n")
+        sys.stderr.write(f"[info] Install with: pip install selenium>=4.15.2\n")
+        raise RuntimeError(f"selenium not properly installed. Using fallback data.")
+    
+    try:
         # Calculate center point for the live map URL
         center_lat = (s + n) / 2
         center_lon = (w + e) / 2
@@ -384,9 +396,6 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
         finally:
             driver.quit()
     
-    except ImportError as e:
-        sys.stderr.write(f"[info] selenium-wire not installed. Install with: pip install selenium-wire\n")
-        raise RuntimeError(f"selenium-wire not available. Using fallback data.")
     except (WebDriverException, SessionNotCreatedException) as e:
         # More specific error message already logged above
         raise RuntimeError(f"WebDriver unavailable. Using fallback data.")
@@ -457,7 +466,9 @@ def fetch_box(s,w,n,e)->Dict[str,Any]:
         if "WebDriver unavailable" in last_error:
             sys.stderr.write(f"[info] WebDriver not available (Firefox/GeckoDriver issue). Falling back to sample data.\n")
         elif "selenium-wire not available" in last_error:
-            sys.stderr.write(f"[info] selenium-wire not installed. Falling back to sample data.\n")
+            sys.stderr.write(f"[info] selenium-wire not available. Falling back to sample data.\n")
+        elif "selenium not properly installed" in last_error:
+            sys.stderr.write(f"[info] selenium package not properly installed. Falling back to sample data.\n")
         else:
             sys.stderr.write(f"[info] WebDriver scraping failed. Falling back to sample data.\n")
     
