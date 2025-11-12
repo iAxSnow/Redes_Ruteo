@@ -6,3 +6,4 @@ geojson==3.1.0
 pyproj==3.6.1
 Flask==3.0.0
 selenium==4.15.2
+selenium-wire==5.1.0
