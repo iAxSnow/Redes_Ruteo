@@ -120,15 +120,65 @@ def test_webdriver():
     try:
         from selenium import webdriver
         from selenium.webdriver.firefox.options import Options
+        from selenium.webdriver.firefox.service import Service
         from selenium.common.exceptions import WebDriverException, SessionNotCreatedException
         
         print("Intentando iniciar Firefox en modo headless...")
         
+        # Find Firefox binary (same logic as waze_incidents_parallel_adaptive.py)
+        firefox_binary = None
+        possible_paths = [
+            '/usr/bin/firefox',
+            '/usr/bin/firefox-esr',
+            '/snap/bin/firefox',
+            '/usr/local/bin/firefox',
+            '/usr/local/bin/firefox-esr'
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path) and os.access(path, os.X_OK):
+                firefox_binary = path
+                print(f"  Detectado Firefox en: {path}")
+                break
+        
+        if not firefox_binary:
+            # Try via PATH
+            code, stdout, _ = run_command("which firefox")
+            if code == 0 and stdout.strip():
+                firefox_binary = stdout.strip()
+                print(f"  Detectado Firefox via PATH: {firefox_binary}")
+            else:
+                code, stdout, _ = run_command("which firefox-esr")
+                if code == 0 and stdout.strip():
+                    firefox_binary = stdout.strip()
+                    print(f"  Detectado Firefox ESR via PATH: {firefox_binary}")
+        
+        # Find GeckoDriver
+        geckodriver_path = None
+        code, stdout, _ = run_command("which geckodriver")
+        if code == 0 and stdout.strip():
+            geckodriver_path = stdout.strip()
+            print(f"  Detectado GeckoDriver en: {geckodriver_path}")
+        
         firefox_options = Options()
         firefox_options.add_argument('-headless')
         
+        # Set binary location if found
+        if firefox_binary:
+            firefox_options.binary_location = firefox_binary
+            print(f"  Configurando Firefox binary: {firefox_binary}")
+        
+        # Configure service if geckodriver found
+        service = None
+        if geckodriver_path:
+            service = Service(executable_path=geckodriver_path)
+            print(f"  Configurando GeckoDriver service: {geckodriver_path}")
+        
         try:
-            driver = webdriver.Firefox(options=firefox_options)
+            if service:
+                driver = webdriver.Firefox(options=firefox_options, service=service)
+            else:
+                driver = webdriver.Firefox(options=firefox_options)
             print("✓ Firefox WebDriver iniciado correctamente")
             
             # Try to navigate to a test page
