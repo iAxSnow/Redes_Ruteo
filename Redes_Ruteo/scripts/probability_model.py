@@ -8,6 +8,7 @@ Calculates failure probabilities for network elements based on threat proximity.
 import os
 import sys
 import psycopg2
+from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -183,7 +184,7 @@ def calculate_failure_probabilities(conn):
                     %(prob)s
                 )
                 FROM (
-                    SELECT DISTINCT w2.gid
+                    SELECT DISTINCT w2.id -- <-- CORRECCIÓN 1: 'gid' cambiado a 'id'
                     FROM rr.ways w2
                     JOIN rr.amenazas_waze t
                     ON ST_DWithin(
@@ -192,7 +193,7 @@ def calculate_failure_probabilities(conn):
                         %(radius)s
                     )
                 ) AS affected_ways
-                WHERE w.gid = affected_ways.gid
+                WHERE w.id = affected_ways.id -- <-- CORRECCIÓN 1: 'gid' cambiado a 'id'
             """, {
                 'prob': FAILURE_PROBABILITY,
                 'radius': INFLUENCE_RADIUS_M
@@ -236,7 +237,7 @@ def calculate_failure_probabilities(conn):
                     ON ST_DWithin(
                         w2.geom::geography,
                         t.geom::geography,
-                        %(radius)
+                        %(radius)s
                     )
                 ) AS affected_ways
                 WHERE w.id = affected_ways.id
@@ -285,7 +286,7 @@ def calculate_failure_probabilities(conn):
                             ON ST_DWithin(
                                 v2.geom::geography,
                                 t.geom::geography,
-                                %(radius)s
+                                %(radius)s -- <-- CORRECCIÓN 2: 's' extra eliminado
                             )
                         ) AS affected_vertices
                         WHERE v.id = affected_vertices.id
@@ -330,7 +331,7 @@ def calculate_failure_probabilities(conn):
                             ON ST_DWithin(
                                 v2.geom::geography,
                                 t.geom::geography,
-                                %(radius)s
+                                %(radius)s -- <-- CORRECCIÓN 3: 's' extra eliminado
                             )
                         ) AS affected_vertices
                         WHERE v.id = affected_vertices.id
@@ -348,7 +349,7 @@ def calculate_failure_probabilities(conn):
 
 def print_statistics(conn):
     """Print summary statistics of failure probabilities."""
-    with conn.cursor() as cur:
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
         print("\n" + "="*60)
         print("FAILURE PROBABILITY STATISTICS")
         print("="*60)
@@ -364,10 +365,10 @@ def print_statistics(conn):
         """)
         row = cur.fetchone()
         print(f"\nWays:")
-        print(f"  Total: {row[0]}")
-        print(f"  Affected (fail_prob > 0): {row[1]}")
-        print(f"  Average probability: {row[2]}")
-        print(f"  Maximum probability: {row[3]}")
+        print(f"  Total: {row['total']}")
+        print(f"  Affected (fail_prob > 0): {row['affected']}")
+        print(f"  Average probability: {row['avg_prob']}")
+        print(f"  Maximum probability: {row['max_prob']}")
         
         # Vertices statistics (if table exists)
         cur.execute("""
@@ -379,7 +380,7 @@ def print_statistics(conn):
             )
         """)
         
-        if cur.fetchone()[0]:
+        if cur.fetchone()['exists']:
             cur.execute("""
                 SELECT 
                     COUNT(*) as total,
@@ -390,10 +391,10 @@ def print_statistics(conn):
             """)
             row = cur.fetchone()
             print(f"\nVertices:")
-            print(f"  Total: {row[0]}")
-            print(f"  Affected (fail_prob > 0): {row[1]}")
-            print(f"  Average probability: {row[2]}")
-            print(f"  Maximum probability: {row[3]}")
+            print(f"  Total: {row['total']}")
+            print(f"  Affected (fail_prob > 0): {row['affected']}")
+            print(f"  Average probability: {row['avg_prob']}")
+            print(f"  Maximum probability: {row['max_prob']}")
         
         print("="*60 + "\n")
 
@@ -410,6 +411,9 @@ def main():
         conn = get_db_connection()
         print("✓ Connected to database")
         
+        # Use RealDictCursor for statistic printing
+        conn.cursor_factory = RealDictCursor
+
         # Ensure fail_prob columns exist
         ensure_fail_prob_columns(conn)
         
