@@ -131,14 +131,11 @@ def load_sample_data()->Dict[str,Any]:
     return {"alerts": [], "jams": [], "irregularities": []}
 
 def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
-    """Fetch Waze data using Selenium WebDriver (Firefox) for dynamic content"""
+    """Fetch Waze data using Selenium-Wire to intercept API requests"""
     try:
-        from selenium import webdriver
+        from seleniumwire import webdriver
         from selenium.webdriver.firefox.options import Options
         from selenium.webdriver.firefox.service import Service
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.support.ui import WebDriverWait
-        from selenium.webdriver.support import expected_conditions as EC
         from selenium.common.exceptions import TimeoutException, WebDriverException, SessionNotCreatedException
         
         # Calculate center point for the live map URL
@@ -152,6 +149,13 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
         firefox_options.set_preference('general.useragent.override', UA["User-Agent"])
         firefox_options.set_preference('permissions.default.image', 2)  # Disable images for faster loading
         firefox_options.set_preference('dom.webnotifications.enabled', False)  # Disable notifications
+        
+        # Configure selenium-wire options to capture network traffic
+        seleniumwire_options = {
+            'disable_encoding': True,  # Disable response encoding to get raw data
+            'verify_ssl': False,  # Don't verify SSL certificates (for Waze HTTPS)
+            'suppress_connection_errors': True,  # Suppress connection errors
+        }
         
         # Auto-detect Firefox binary location (prioritize esr)
         firefox_paths = [
@@ -212,11 +216,11 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
         
         try:
             if service:
-                driver = webdriver.Firefox(service=service, options=firefox_options)
+                driver = webdriver.Firefox(service=service, options=firefox_options, seleniumwire_options=seleniumwire_options)
             else:
-                driver = webdriver.Firefox(options=firefox_options)
+                driver = webdriver.Firefox(options=firefox_options, seleniumwire_options=seleniumwire_options)
             driver.set_page_load_timeout(TIMEOUT)
-            sys.stderr.write(f"[info] Firefox WebDriver started successfully\n")
+            sys.stderr.write(f"[info] Firefox WebDriver with selenium-wire started successfully\n")
         except SessionNotCreatedException as e:
             error_msg = str(e)
             if "geckodriver" in error_msg.lower():
@@ -237,134 +241,145 @@ def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
         
         try:
             live_map_url = f"https://www.waze.com/live-map?zoom={zoom}&lat={center_lat}&lon={center_lon}"
+            
+            # Clear previous requests
+            del driver.requests
+            
+            # Navigate to Waze Live Map
+            sys.stderr.write(f"[info] Loading Waze Live Map and intercepting API requests...\n")
             driver.get(live_map_url)
             
-            # ----- INICIO DE LA CORRECCIÓN DE TIMING -----
-            # Esperar a que el tag <script id="__NEXT_DATA__"> exista.
-            # Este tag contiene el JSON con todos los datos de la página.
-            # Aumentamos el tiempo de espera a 20 segundos.
-            sys.stderr.write(f"[info] Waiting for __NEXT_DATA__ script tag (max 20s)...\n")
-            wait = WebDriverWait(driver, 20) # Aumentado a 20s
+            # Wait for the page to make API calls (5 seconds should be enough)
+            time.sleep(5)
             
-            wait.until(EC.presence_of_element_located((By.ID, "__NEXT_DATA__")))
+            # Intercept and extract data from API requests
+            sys.stderr.write(f"[info] Analyzing {len(driver.requests)} intercepted requests...\n")
             
-            sys.stderr.write(f"[info] __NEXT_DATA__ found. Waiting 2s for full render...\n")
-            time.sleep(2) # Pequeña espera extra por si acaso
-            # ----- FIN DE LA CORRECCIÓN DE TIMING -----
-
-            # Method 1: Get data from __NEXT_DATA__ script tag
-            data_json = None
-            try:
-                next_data_element = driver.find_element(By.ID, "__NEXT_DATA__")
-                data_json = next_data_element.get_attribute('innerHTML')
-                sys.stderr.write(f"[info] Extracted __NEXT_DATA__ (size: {len(data_json)})\n")
-            except Exception as e:
-                sys.stderr.write(f"[warn] Could not find or read __NEXT_DATA__: {e}\n")
-
-            # Method 2: Fallback to window.W.model
-            if not data_json:
-                sys.stderr.write(f"[info] __NEXT_DATA__ empty, trying window.W.model...\n")
-                script = "return window.W && window.W.model ? JSON.stringify(window.W.model) : null;"
-                data_json = driver.execute_script(script)
-                if data_json:
-                    sys.stderr.write(f"[info] Extracted window.W.model (size: {len(data_json)})\n")
+            extracted_data = {"alerts": [], "jams": [], "irregularities": []}
+            unique_uuids = set()
             
-            if data_json:
-                # --- INICIO DE CORRECCIÓN: Parseo Robusto de JSON ---
-                data = data_json
-                # Bucle para manejar JSON doble o triple codificado
-                while isinstance(data, str):
-                    try:
-                        data = json.loads(data)
-                    except json.JSONDecodeError:
-                        sys.stderr.write(f"[warn] Fallo al decodificar fragmento JSON: {data[:100]}...\n")
-                        raise RuntimeError("Datos JSON inválidos desde WebDriver")
-                
-                if not isinstance(data, dict):
-                    raise RuntimeError("Los datos extraídos no son un diccionario (dict)")
-                # --- FIN DE CORRECCIÓN: Parseo Robusto de JSON ---
-                
-                # Extract alerts, jams, and irregularities from the data structure
-                extracted_data = {"alerts": [], "jams": [], "irregularities": []}
-                
-                # Función recursiva para navegar el objeto JSON
-                def extract_from_dict(obj, depth=0):
-                    if depth > 10:  # Prevenir recursión infinita
-                        return
+            # Waze API endpoints to look for
+            waze_endpoints = [
+                '/row-',  # Row-based grid data
+                '/Descartes-live/',  # Live traffic data
+                '/rtserver/',  # Real-time server data
+                '/georss',  # GeoRSS feeds
+                '/RoutingRequest',  # Routing requests sometimes contain alerts
+            ]
+            
+            # Analyze intercepted requests
+            for request in driver.requests:
+                try:
+                    # Check if this is a Waze API request with a response
+                    if not request.response or 'waze.com' not in request.url:
+                        continue
                     
-                    if isinstance(obj, dict):
-                        # --- INICIO DE CORRECCIÓN: Lógica de extracción robusta ---
-                        try:
-                            if "alerts" in obj:
-                                alerts_data = obj["alerts"]
-                                if isinstance(alerts_data, list):
-                                    extracted_data["alerts"].extend([item for item in alerts_data if isinstance(item, dict)])
-                                elif isinstance(alerts_data, dict) and "objects" in alerts_data and isinstance(alerts_data["objects"], dict):
-                                    extracted_data["alerts"].extend([item for item in alerts_data["objects"].values() if isinstance(item, dict)])
-                                elif isinstance(alerts_data, dict):
-                                    extracted_data["alerts"].extend([item for item in alerts_data.values() if isinstance(item, dict)])
-
-                            if "jams" in obj:
-                                jams_data = obj["jams"]
-                                if isinstance(jams_data, list):
-                                    extracted_data["jams"].extend([item for item in jams_data if isinstance(item, dict)])
-                                elif isinstance(jams_data, dict) and "objects" in jams_data and isinstance(jams_data["objects"], dict):
-                                    extracted_data["jams"].extend([item for item in jams_data["objects"].values() if isinstance(item, dict)])
-                                elif isinstance(jams_data, dict):
-                                    extracted_data["jams"].extend([item for item in jams_data.values() if isinstance(item, dict)])
-
-                            if "irregularities" in obj:
-                                irr_data = obj["irregularities"]
-                                if isinstance(irr_data, list):
-                                    extracted_data["irregularities"].extend([item for item in irr_data if isinstance(item, dict)])
-                                elif isinstance(irr_data, dict) and "objects" in irr_data and isinstance(irr_data["objects"], dict):
-                                    extracted_data["irregularities"].extend([item for item in irr_data["objects"].values() if isinstance(item, dict)])
-                                elif isinstance(irr_data, dict):
-                                    extracted_data["irregularities"].extend([item for item in irr_data.values() if isinstance(item, dict)])
-                        except Exception as e:
-                            sys.stderr.write(f"[warn] Error menor durante extracción: {e}\n")
-                        # --- FIN DE CORRECCIÓN: Lógica de extracción robusta ---
+                    # Check if URL matches any Waze API endpoints
+                    is_waze_api = any(endpoint in request.url for endpoint in waze_endpoints)
+                    if not is_waze_api:
+                        continue
+                    
+                    # Only process successful responses
+                    if request.response.status_code != 200:
+                        continue
+                    
+                    sys.stderr.write(f"[info] Found Waze API request: {request.url[:80]}...\n")
+                    
+                    # Try to parse the response body as JSON
+                    try:
+                        response_body = request.response.body
+                        if isinstance(response_body, bytes):
+                            response_body = response_body.decode('utf-8')
                         
-                        # Búsqueda recursiva
-                        for value in obj.values():
-                            extract_from_dict(value, depth + 1)
-                    elif isinstance(obj, list):
-                        for item in obj:
-                            extract_from_dict(item, depth + 1)
+                        data = json.loads(response_body)
+                        
+                        # Extract alerts
+                        if "alerts" in data:
+                            alerts = data["alerts"]
+                            if isinstance(alerts, list):
+                                for alert in alerts:
+                                    if isinstance(alert, dict) and alert.get("uuid"):
+                                        if alert["uuid"] not in unique_uuids:
+                                            unique_uuids.add(alert["uuid"])
+                                            extracted_data["alerts"].append(alert)
+                            elif isinstance(alerts, dict):
+                                for alert in alerts.values():
+                                    if isinstance(alert, dict) and alert.get("uuid"):
+                                        if alert["uuid"] not in unique_uuids:
+                                            unique_uuids.add(alert["uuid"])
+                                            extracted_data["alerts"].append(alert)
+                        
+                        # Extract jams
+                        if "jams" in data:
+                            jams = data["jams"]
+                            if isinstance(jams, list):
+                                for jam in jams:
+                                    if isinstance(jam, dict) and jam.get("uuid"):
+                                        if jam["uuid"] not in unique_uuids:
+                                            unique_uuids.add(jam["uuid"])
+                                            extracted_data["jams"].append(jam)
+                            elif isinstance(jams, dict):
+                                for jam in jams.values():
+                                    if isinstance(jam, dict) and jam.get("uuid"):
+                                        if jam["uuid"] not in unique_uuids:
+                                            unique_uuids.add(jam["uuid"])
+                                            extracted_data["jams"].append(jam)
+                        
+                        # Extract irregularities
+                        if "irregularities" in data:
+                            irrs = data["irregularities"]
+                            if isinstance(irrs, list):
+                                for irr in irrs:
+                                    if isinstance(irr, dict) and irr.get("uuid"):
+                                        if irr["uuid"] not in unique_uuids:
+                                            unique_uuids.add(irr["uuid"])
+                                            extracted_data["irregularities"].append(irr)
+                            elif isinstance(irrs, dict):
+                                for irr in irrs.values():
+                                    if isinstance(irr, dict) and irr.get("uuid"):
+                                        if irr["uuid"] not in unique_uuids:
+                                            unique_uuids.add(irr["uuid"])
+                                            extracted_data["irregularities"].append(irr)
+                    
+                    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                        # Not JSON or not decodable, skip
+                        continue
                 
-                extract_from_dict(data)
-                
-                # Filter by bounding box
-                filtered_data = {"alerts": [], "jams": [], "irregularities": []}
-                
-                for alert in extracted_data.get("alerts", []):
-                    # --- INICIO CORRECCIÓN: Filtrado robusto ---
-                    loc = alert.get("location", {})
-                    lat = loc.get("y") or loc.get("lat")
-                    lon = loc.get("x") or loc.get("lon")
-                    if lat and lon and s <= lat <= n and w <= lon <= e:
-                        filtered_data["alerts"].append(alert)
-                
-                for jam in extracted_data.get("jams", []):
-                    line = jam.get("line", [])
-                    if any(s <= p.get("y", 0) <= n and w <= p.get("x", 0) <= e for p in line if isinstance(p, dict)):
-                        filtered_data["jams"].append(jam)
-                
-                for irr in extracted_data.get("irregularities", []):
-                    seg = irr.get("seg", {}) or irr.get("location", {})
-                    lat = seg.get("y") or seg.get("lat")
-                    lon = seg.get("x") or seg.get("lon")
-                    if lat and lon and s <= lat <= n and w <= lon <= e:
-                        filtered_data["irregularities"].append(irr)
-                # --- FIN CORRECCIÓN: Filtrado robusto ---
+                except Exception as e:
+                    # Skip this request if there's any error
+                    continue
+            
+            sys.stderr.write(f"[info] Extracted from API: {len(extracted_data['alerts'])} alerts, {len(extracted_data['jams'])} jams\n")
+            
+            # Filter by bounding box
+            filtered_data = {"alerts": [], "jams": [], "irregularities": []}
+            
+            for alert in extracted_data.get("alerts", []):
+                loc = alert.get("location", {})
+                lat = loc.get("y") or loc.get("lat")
+                lon = loc.get("x") or loc.get("lon")
+                if lat and lon and s <= lat <= n and w <= lon <= e:
+                    filtered_data["alerts"].append(alert)
+            
+            for jam in extracted_data.get("jams", []):
+                line = jam.get("line", [])
+                if any(s <= p.get("y", 0) <= n and w <= p.get("x", 0) <= e for p in line if isinstance(p, dict)):
+                    filtered_data["jams"].append(jam)
+            
+            for irr in extracted_data.get("irregularities", []):
+                seg = irr.get("seg", {}) or irr.get("location", {})
+                lat = seg.get("y") or seg.get("lat")
+                lon = seg.get("x") or seg.get("lon")
+                if lat and lon and s <= lat <= n and w <= lon <= e:
+                    filtered_data["irregularities"].append(irr)
 
-                if any(filtered_data.values()):
-                    sys.stderr.write(f"[ok] WebDriver extracted {len(filtered_data['alerts'])} alerts, {len(filtered_data['jams'])} jams\n")
-                    return filtered_data
+            if any(filtered_data.values()):
+                sys.stderr.write(f"[ok] Selenium-wire extracted {len(filtered_data['alerts'])} alerts, {len(filtered_data['jams'])} jams\n")
+                return filtered_data
             
             # If no data found, return empty
-            sys.stderr.write(f"[warn] WebDriver could not extract data from page\n")
-            raise RuntimeError("No data extracted via WebDriver")
+            sys.stderr.write(f"[warn] Selenium-wire could not extract data from intercepted API requests\n")
+            raise RuntimeError("No data extracted via selenium-wire")
             
         finally:
             driver.quit()
