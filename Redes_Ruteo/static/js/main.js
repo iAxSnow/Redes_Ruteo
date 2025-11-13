@@ -18,7 +18,8 @@ let routeLayers = {
 let clickMode = 'start'; // 'start' or 'end'
 
 // Simulation variables
-let failedThreats = [];
+let failedEdges = [];
+let failedNodes = [];
 let showOnlyActive = false;
 
 // Route colors
@@ -434,17 +435,25 @@ function calculateRoute() {
     const startLatLng = startMarker.getLatLng();
     const endLatLng = endMarker.getLatLng();
     
+    // Prepare request body with optional failed edges from simulation
+    const requestBody = {
+        start: { lat: startLatLng.lat, lng: startLatLng.lng },
+        end: { lat: endLatLng.lat, lng: endLatLng.lng },
+        algorithm: 'all'
+    };
+    
+    // Include failed edges if simulation is active
+    if (failedEdges.length > 0) {
+        requestBody.failed_edges = failedEdges;
+    }
+    
     // Call API for all algorithms
     fetch('/api/calculate_route', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-            start: { lat: startLatLng.lat, lng: startLatLng.lng },
-            end: { lat: endLatLng.lat, lng: endLatLng.lng },
-            algorithm: 'all'
-        })
+        body: JSON.stringify(requestBody)
     })
     .then(response => {
         if (!response.ok) {
@@ -469,8 +478,16 @@ function calculateRoute() {
             }
         });
         
+        // Check if any routes were calculated
+        const routeCount = Object.keys(data).length;
+        if (routeCount === 0) {
+            routeInfo.innerHTML = '<p style="color: orange;">No se encontraron rutas entre los puntos seleccionados. Intenta con otros puntos.</p>';
+            return;
+        }
+        
         // Draw each route on map with different colors
         let allBounds = [];
+        let routesDisplayed = 0;
         Object.keys(data).forEach(algorithmKey => {
             const routeData = data[algorithmKey];
             if (routeData && routeData.route_geojson) {
@@ -491,8 +508,14 @@ function calculateRoute() {
                 
                 routeLayers[algorithmKey] = layer;
                 allBounds.push(layer.getBounds());
+                routesDisplayed++;
             }
         });
+        
+        // Warn if some algorithms didn't find routes
+        if (routesDisplayed < 4) {
+            console.warn(`Only ${routesDisplayed} out of 4 algorithms found routes`);
+        }
         
         // Fit map to all routes
         if (allBounds.length > 0) {
@@ -503,20 +526,41 @@ function calculateRoute() {
         // Display route info for all algorithms
         let routeInfoHtml = '<h4>Resultados de Ruteo</h4>';
         
-        Object.keys(data).forEach(algorithmKey => {
+        // Check each algorithm and display results or "no route found"
+        const algorithmNames = {
+            'dijkstra_dist': 'Dijkstra (Distancia)',
+            'dijkstra_prob': 'Dijkstra (Probabilidad)',
+            'astar_prob': 'A* (Probabilidad)',
+            'filtered_dijkstra': 'Dijkstra Filtrado'
+        };
+        
+        Object.keys(algorithmNames).forEach(algorithmKey => {
             const routeData = data[algorithmKey];
+            const color = routeColors[algorithmKey];
+            const algorithmName = algorithmNames[algorithmKey];
+            
             if (routeData && routeData.route_geojson) {
                 const lengthKm = (routeData.route_geojson.properties.total_length_m / 1000).toFixed(2);
-                const color = routeColors[algorithmKey];
                 
                 routeInfoHtml += `
                     <div class="route-metric">
-                        <span class="metric-label" style="color: ${color}">⬤ ${routeData.algorithm}:</span>
+                        <span class="metric-label" style="color: ${color}">⬤ ${algorithmName}:</span>
                         <span class="metric-value">${lengthKm} km (${routeData.compute_time_ms.toFixed(2)} ms)</span>
+                    </div>
+                `;
+            } else {
+                routeInfoHtml += `
+                    <div class="route-metric">
+                        <span class="metric-label" style="color: ${color}">⬤ ${algorithmName}:</span>
+                        <span class="metric-value" style="color: #999;">No se encontró ruta</span>
                     </div>
                 `;
             }
         });
+        
+        if (failedEdges.length > 0) {
+            routeInfoHtml += `<p style="color: #e74c3c; margin-top: 10px; font-size: 0.9em;">⚠ Simulación activa: ${failedEdges.length} arcos excluidos</p>`;
+        }
         
         routeInfo.innerHTML = routeInfoHtml;
         
@@ -603,7 +647,8 @@ function simulateFailures() {
         return response.json();
     })
     .then(data => {
-        failedThreats = data.failed_edges || [];
+        failedEdges = data.failed_edges || [];
+        failedNodes = data.failed_nodes || [];
         
         simulationInfo.innerHTML = `
             <div class="route-metric">
@@ -618,12 +663,13 @@ function simulateFailures() {
                 <span class="metric-label">Nodos:</span>
                 <span class="metric-value">${data.failed_nodes.length}</span>
             </div>
+            <p style="color: #e74c3c; margin-top: 10px; font-size: 0.9em;">⚠ Las rutas ahora evitarán estos elementos. Recalcula la ruta.</p>
         `;
         
         // Highlight failed threats on map
         highlightFailedThreats();
         
-        console.log(`Simulation: ${data.total_failed} elements failed`);
+        console.log(`Simulation: ${data.total_failed} elements failed (${failedEdges.length} edges, ${failedNodes.length} nodes)`);
     })
     .catch(error => {
         console.error('Error simulating failures:', error);
@@ -674,7 +720,8 @@ document.addEventListener('DOMContentLoaded', function() {
             simulateFailures();
         } else {
             // Clear simulation
-            failedThreats = [];
+            failedEdges = [];
+            failedNodes = [];
             const simulationInfo = document.getElementById('simulation-info');
             simulationInfo.classList.remove('visible');
             highlightFailedThreats();
