@@ -181,6 +181,10 @@ def build_route_geojson(cur, route_segments):
             if segment['length_m']:
                 total_length_m += float(segment['length_m'])
     
+    # Validate that we have valid coordinates
+    if not coordinates or len(coordinates) < 2:
+        return None
+    
     return {
         "type": "Feature",
         "properties": {
@@ -198,7 +202,7 @@ def build_route_geojson(cur, route_segments):
 def api_calculate_route():
     """
     API endpoint to calculate multiple optimal routes using different algorithms.
-    Expects JSON body: {"start": {"lat": y1, "lng": x1}, "end": {"lat": y2, "lng": x2}, "algorithm": "all"}
+    Expects JSON body: {"start": {"lat": y1, "lng": x1}, "end": {"lat": y2, "lng": x2}, "algorithm": "all", "failed_edges": []}
     Returns: Multiple routes with their computation times
     """
     try:
@@ -212,6 +216,7 @@ def api_calculate_route():
         start = data['start']
         end = data['end']
         algorithm = data.get('algorithm', 'dijkstra_dist')  # Default to distance-based Dijkstra
+        failed_edges = data.get('failed_edges', [])  # Optional list of failed edge IDs to exclude
         
         if 'lat' not in start or 'lng' not in start or 'lat' not in end or 'lng' not in end:
             return jsonify({
@@ -274,30 +279,44 @@ def api_calculate_route():
         
         results = {}
         
+        # Build WHERE clause for excluding failed edges
+        failed_edges_clause = ""
+        if failed_edges and len(failed_edges) > 0:
+            failed_edges_str = ','.join(str(int(e)) for e in failed_edges)
+            failed_edges_clause = f" AND id NOT IN ({failed_edges_str})"
+        
         # Route 1: Dijkstra with distance only
         if algorithm == 'all' or algorithm == 'dijkstra_dist':
             try:
                 start_time = time.time()
-                cur.execute("""
+                query = f"""
                     SELECT 
                         r.seq, r.node, r.edge, r.cost, r.agg_cost,
                         w.geom, w.highway, w.length_m
                     FROM pgr_dijkstra(
-                        'SELECT id, source, target, length_m as cost FROM rr.ways',
+                        'SELECT id, source, target, length_m as cost FROM rr.ways WHERE 1=1{failed_edges_clause}',
                         %s, %s, directed := false
                     ) r
                     LEFT JOIN rr.ways w ON r.edge = w.id
+                    WHERE r.edge != -1
                     ORDER BY r.seq
-                """, (source_node, target_node))
+                """
+                cur.execute(query, (source_node, target_node))
                 route_segments = cur.fetchall()
                 compute_time_ms = (time.time() - start_time) * 1000
                 
                 if route_segments and len(route_segments) > 0:
-                    results['dijkstra_dist'] = {
-                        "route_geojson": build_route_geojson(cur, route_segments),
-                        "compute_time_ms": round(compute_time_ms, 2),
-                        "algorithm": "Dijkstra (Distancia)"
-                    }
+                    route_geojson = build_route_geojson(cur, route_segments)
+                    if route_geojson:
+                        results['dijkstra_dist'] = {
+                            "route_geojson": route_geojson,
+                            "compute_time_ms": round(compute_time_ms, 2),
+                            "algorithm": "Dijkstra (Distancia)"
+                        }
+                    else:
+                        app.logger.warning("dijkstra_dist: No valid geometry for route")
+                else:
+                    app.logger.warning("dijkstra_dist: No path found between nodes")
             except Exception as e:
                 app.logger.error(f"Error calculating dijkstra_dist route: {str(e)}")
         
@@ -305,28 +324,36 @@ def api_calculate_route():
         if algorithm == 'all' or algorithm == 'dijkstra_prob':
             try:
                 start_time = time.time()
-                cur.execute("""
+                query = f"""
                     SELECT 
                         r.seq, r.node, r.edge, r.cost, r.agg_cost,
                         w.geom, w.highway, w.length_m
                     FROM pgr_dijkstra(
                         'SELECT id, source, target, 
                          length_m * (1 + (COALESCE(fail_prob, 0) * 100)) as cost 
-                         FROM rr.ways',
+                         FROM rr.ways WHERE 1=1{failed_edges_clause}',
                         %s, %s, directed := false
                     ) r
                     LEFT JOIN rr.ways w ON r.edge = w.id
+                    WHERE r.edge != -1
                     ORDER BY r.seq
-                """, (source_node, target_node))
+                """
+                cur.execute(query, (source_node, target_node))
                 route_segments = cur.fetchall()
                 compute_time_ms = (time.time() - start_time) * 1000
                 
                 if route_segments and len(route_segments) > 0:
-                    results['dijkstra_prob'] = {
-                        "route_geojson": build_route_geojson(cur, route_segments),
-                        "compute_time_ms": round(compute_time_ms, 2),
-                        "algorithm": "Dijkstra (Probabilidad)"
-                    }
+                    route_geojson = build_route_geojson(cur, route_segments)
+                    if route_geojson:
+                        results['dijkstra_prob'] = {
+                            "route_geojson": route_geojson,
+                            "compute_time_ms": round(compute_time_ms, 2),
+                            "algorithm": "Dijkstra (Probabilidad)"
+                        }
+                    else:
+                        app.logger.warning("dijkstra_prob: No valid geometry for route")
+                else:
+                    app.logger.warning("dijkstra_prob: No path found between nodes")
             except Exception as e:
                 app.logger.error(f"Error calculating dijkstra_prob route: {str(e)}")
         
@@ -334,7 +361,7 @@ def api_calculate_route():
         if algorithm == 'all' or algorithm == 'astar_prob':
             try:
                 start_time = time.time()
-                cur.execute("""
+                query = f"""
                     SELECT 
                         r.seq, r.node, r.edge, r.cost, r.agg_cost,
                         w.geom, w.highway, w.length_m
@@ -345,21 +372,29 @@ def api_calculate_route():
                          ST_Y(ST_StartPoint(geom)) as y1,
                          ST_X(ST_EndPoint(geom)) as x2,
                          ST_Y(ST_EndPoint(geom)) as y2
-                         FROM rr.ways',
+                         FROM rr.ways WHERE 1=1{failed_edges_clause}',
                         %s, %s, directed := false
                     ) r
                     LEFT JOIN rr.ways w ON r.edge = w.id
+                    WHERE r.edge != -1
                     ORDER BY r.seq
-                """, (source_node, target_node))
+                """
+                cur.execute(query, (source_node, target_node))
                 route_segments = cur.fetchall()
                 compute_time_ms = (time.time() - start_time) * 1000
                 
                 if route_segments and len(route_segments) > 0:
-                    results['astar_prob'] = {
-                        "route_geojson": build_route_geojson(cur, route_segments),
-                        "compute_time_ms": round(compute_time_ms, 2),
-                        "algorithm": "A* (Probabilidad)"
-                    }
+                    route_geojson = build_route_geojson(cur, route_segments)
+                    if route_geojson:
+                        results['astar_prob'] = {
+                            "route_geojson": route_geojson,
+                            "compute_time_ms": round(compute_time_ms, 2),
+                            "algorithm": "A* (Probabilidad)"
+                        }
+                    else:
+                        app.logger.warning("astar_prob: No valid geometry for route")
+                else:
+                    app.logger.warning("astar_prob: No path found between nodes")
             except Exception as e:
                 app.logger.error(f"Error calculating astar_prob route: {str(e)}")
         
@@ -367,28 +402,36 @@ def api_calculate_route():
         if algorithm == 'all' or algorithm == 'filtered_dijkstra':
             try:
                 start_time = time.time()
-                cur.execute("""
+                query = f"""
                     SELECT 
                         r.seq, r.node, r.edge, r.cost, r.agg_cost,
                         w.geom, w.highway, w.length_m
                     FROM pgr_dijkstra(
                         'SELECT id, source, target, length_m as cost 
                          FROM rr.ways 
-                         WHERE COALESCE(fail_prob, 0) < 0.5',
+                         WHERE COALESCE(fail_prob, 0) < 0.5{failed_edges_clause}',
                         %s, %s, directed := false
                     ) r
                     LEFT JOIN rr.ways w ON r.edge = w.id
+                    WHERE r.edge != -1
                     ORDER BY r.seq
-                """, (source_node, target_node))
+                """
+                cur.execute(query, (source_node, target_node))
                 route_segments = cur.fetchall()
                 compute_time_ms = (time.time() - start_time) * 1000
                 
                 if route_segments and len(route_segments) > 0:
-                    results['filtered_dijkstra'] = {
-                        "route_geojson": build_route_geojson(cur, route_segments),
-                        "compute_time_ms": round(compute_time_ms, 2),
-                        "algorithm": "Dijkstra Filtrado (Solo Seguros)"
-                    }
+                    route_geojson = build_route_geojson(cur, route_segments)
+                    if route_geojson:
+                        results['filtered_dijkstra'] = {
+                            "route_geojson": route_geojson,
+                            "compute_time_ms": round(compute_time_ms, 2),
+                            "algorithm": "Dijkstra Filtrado (Solo Seguros)"
+                        }
+                    else:
+                        app.logger.warning("filtered_dijkstra: No valid geometry for route")
+                else:
+                    app.logger.warning("filtered_dijkstra: No path found between nodes")
             except Exception as e:
                 app.logger.error(f"Error calculating filtered_dijkstra route: {str(e)}")
         
