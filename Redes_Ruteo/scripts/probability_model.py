@@ -8,6 +8,7 @@ Calculates failure probabilities for network elements based on threat proximity.
 import os
 import sys
 import psycopg2
+from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,6 +41,8 @@ def ensure_fail_prob_columns(conn):
     Ensure that fail_prob columns exist in rr.ways and rr.ways_vertices_pgr.
     Creates columns if they don't exist.
     """
+    # Esta función se llama ANTES de que se establezca RealDictCursor,
+    # por lo que usa cursores estándar (tuplas).
     with conn.cursor() as cur:
         # Check and add fail_prob column to rr.ways
         cur.execute("""
@@ -71,6 +74,8 @@ def ensure_fail_prob_columns(conn):
             )
         """)
         
+        # --- CORRECCIÓN 1: Acceder por índice [0] ---
+        # Este cursor es estándar, no RealDictCursor.
         if cur.fetchone()[0]:
             # Check and add fail_prob column to rr.ways_vertices_pgr
             cur.execute("""
@@ -98,6 +103,7 @@ def ensure_fail_prob_columns(conn):
 
 def reset_failure_probabilities(conn):
     """Reset all failure probabilities to 0.0."""
+    # Este cursor SÍ es RealDictCursor, configurado en main()
     with conn.cursor() as cur:
         print("Resetting failure probabilities to 0.0...")
         
@@ -115,7 +121,8 @@ def reset_failure_probabilities(conn):
             )
         """)
         
-        if cur.fetchone()[0]:
+        # --- CORRECCIÓN 2: Acceder por nombre de columna ['exists'] ---
+        if cur.fetchone()['exists']:
             cur.execute("UPDATE rr.ways_vertices_pgr SET fail_prob = 0.0")
             vertices_count = cur.rowcount
             print(f"✓ Reset {ways_count} ways and {vertices_count} vertices")
@@ -131,6 +138,7 @@ def calculate_failure_probabilities(conn):
     Assigns probabilities to network elements within influence radius of threats.
     Processes all threat sources: Waze, Weather, and Traffic Calming.
     """
+    # Este cursor SÍ es RealDictCursor, configurado en main()
     with conn.cursor() as cur:
         # Check which threat tables exist and get counts
         waze_count = 0
@@ -139,22 +147,25 @@ def calculate_failure_probabilities(conn):
         
         # Check Waze threats
         try:
-            cur.execute("SELECT COUNT(*) FROM rr.amenazas_waze")
-            waze_count = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) as count FROM rr.amenazas_waze")
+            # --- CORRECCIÓN 3: Acceder por nombre de columna ['count'] ---
+            waze_count = cur.fetchone()['count']
         except Exception:
             print("⚠ Table rr.amenazas_waze does not exist or is not accessible")
         
         # Check Weather threats
         try:
-            cur.execute("SELECT COUNT(*) FROM rr.amenazas_clima")
-            weather_count = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) as count FROM rr.amenazas_clima")
+            # --- CORRECCIÓN 4: Acceder por nombre de columna ['count'] ---
+            weather_count = cur.fetchone()['count']
         except Exception:
             print("⚠ Table rr.amenazas_clima does not exist or is not accessible")
         
         # Check Traffic Calming threats
         try:
-            cur.execute("SELECT COUNT(*) FROM rr.amenazas_calming")
-            calming_count = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) as count FROM rr.amenazas_calming")
+            # --- CORRECCIÓN 5: Acceder por nombre de columna ['count'] ---
+            calming_count = cur.fetchone()['count']
         except Exception:
             print("⚠ Table rr.amenazas_calming does not exist or is not accessible")
         
@@ -174,7 +185,7 @@ def calculate_failure_probabilities(conn):
         # Update ways within influence radius of threats (from all sources)
         print(f"\nCalculating probabilities for ways (radius: {INFLUENCE_RADIUS_M}m)...")
         
-        # Process Waze threats
+        # Process Waze threats (optimized with JOIN)
         if waze_count > 0:
             cur.execute("""
                 UPDATE rr.ways w
@@ -182,15 +193,17 @@ def calculate_failure_probabilities(conn):
                     COALESCE(w.fail_prob, 0.0),
                     %(prob)s
                 )
-                WHERE EXISTS (
-                    SELECT 1
-                    FROM rr.amenazas_waze t
-                    WHERE ST_DWithin(
-                        w.geom::geography,
+                FROM (
+                    SELECT DISTINCT w2.id
+                    FROM rr.ways w2
+                    JOIN rr.amenazas_waze t
+                    ON ST_DWithin(
+                        w2.geom::geography,
                         t.geom::geography,
                         %(radius)s
                     )
-                )
+                ) AS affected_ways
+                WHERE w.id = affected_ways.id
             """, {
                 'prob': FAILURE_PROBABILITY,
                 'radius': INFLUENCE_RADIUS_M
@@ -206,11 +219,8 @@ def calculate_failure_probabilities(conn):
                     COALESCE(w.fail_prob, 0.0),
                     %(prob)s * (t.severity / 3.0)
                 )
-                WHERE EXISTS (
-                    SELECT 1
-                    FROM rr.amenazas_clima t
-                    WHERE ST_Intersects(w.geom, t.geom)
-                )
+                FROM rr.amenazas_clima t -- CORRECCIÓN: Añadido FROM
+                WHERE ST_Intersects(w.geom, t.geom)
             """, {
                 'prob': FAILURE_PROBABILITY
             })
@@ -219,21 +229,25 @@ def calculate_failure_probabilities(conn):
         
         # Process Traffic Calming threats
         if calming_count > 0:
+            # Use spatial index and batch processing for better performance with many threats
+            print(f"  Processing {calming_count} traffic calming threats (this may take a moment)...")
             cur.execute("""
                 UPDATE rr.ways w
                 SET fail_prob = GREATEST(
                     COALESCE(w.fail_prob, 0.0),
                     %(prob)s * 0.3
                 )
-                WHERE EXISTS (
-                    SELECT 1
-                    FROM rr.amenazas_calming t
-                    WHERE ST_DWithin(
-                        w.geom::geography,
+                FROM (
+                    SELECT DISTINCT w2.id
+                    FROM rr.ways w2
+                    JOIN rr.amenazas_calming t
+                    ON ST_DWithin(
+                        w2.geom::geography,
                         t.geom::geography,
                         %(radius)s
                     )
-                )
+                ) AS affected_ways
+                WHERE w.id = affected_ways.id
             """, {
                 'prob': FAILURE_PROBABILITY,
                 'radius': INFLUENCE_RADIUS_M
@@ -251,7 +265,8 @@ def calculate_failure_probabilities(conn):
             )
         """)
         
-        if cur.fetchone()[0]:
+        # --- CORRECCIÓN 6: Acceder por nombre de columna ['exists'] ---
+        if cur.fetchone()['exists']:
             # Check if geom column exists in ways_vertices_pgr
             cur.execute("""
                 SELECT column_name 
@@ -264,7 +279,7 @@ def calculate_failure_probabilities(conn):
             if cur.fetchone():
                 print(f"\nCalculating probabilities for vertices (radius: {INFLUENCE_RADIUS_M}m)...")
                 
-                # Process Waze threats for vertices
+                # Process Waze threats for vertices (optimized with JOIN)
                 if waze_count > 0:
                     cur.execute("""
                         UPDATE rr.ways_vertices_pgr v
@@ -272,15 +287,17 @@ def calculate_failure_probabilities(conn):
                             COALESCE(v.fail_prob, 0.0),
                             %(prob)s
                         )
-                        WHERE EXISTS (
-                            SELECT 1
-                            FROM rr.amenazas_waze t
-                            WHERE ST_DWithin(
-                                v.geom::geography,
+                        FROM (
+                            SELECT DISTINCT v2.id
+                            FROM rr.ways_vertices_pgr v2
+                            JOIN rr.amenazas_waze t
+                            ON ST_DWithin(
+                                v2.geom::geography,
                                 t.geom::geography,
                                 %(radius)s
                             )
-                        )
+                        ) AS affected_vertices
+                        WHERE v.id = affected_vertices.id
                     """, {
                         'prob': FAILURE_PROBABILITY,
                         'radius': INFLUENCE_RADIUS_M
@@ -296,18 +313,15 @@ def calculate_failure_probabilities(conn):
                             COALESCE(v.fail_prob, 0.0),
                             %(prob)s * (t.severity / 3.0)
                         )
-                        WHERE EXISTS (
-                            SELECT 1
-                            FROM rr.amenazas_clima t
-                            WHERE ST_Intersects(v.geom, t.geom)
-                        )
+                        FROM rr.amenazas_clima t -- CORRECCIÓN: Añadido FROM
+                        WHERE ST_Intersects(v.geom, t.geom)
                     """, {
                         'prob': FAILURE_PROBABILITY
                     })
                     vertices_weather = cur.rowcount
                     print(f"✓ Updated {vertices_weather} vertices based on Weather threats")
                 
-                # Process Traffic Calming threats for vertices
+                # Process Traffic Calming threats for vertices (optimized with JOIN)
                 if calming_count > 0:
                     cur.execute("""
                         UPDATE rr.ways_vertices_pgr v
@@ -315,15 +329,17 @@ def calculate_failure_probabilities(conn):
                             COALESCE(v.fail_prob, 0.0),
                             %(prob)s * 0.3
                         )
-                        WHERE EXISTS (
-                            SELECT 1
-                            FROM rr.amenazas_calming t
-                            WHERE ST_DWithin(
-                                v.geom::geography,
+                        FROM (
+                            SELECT DISTINCT v2.id
+                            FROM rr.ways_vertices_pgr v2
+                            JOIN rr.amenazas_calming t
+                            ON ST_DWithin(
+                                v2.geom::geography,
                                 t.geom::geography,
                                 %(radius)s
                             )
-                        )
+                        ) AS affected_vertices
+                        WHERE v.id = affected_vertices.id
                     """, {
                         'prob': FAILURE_PROBABILITY,
                         'radius': INFLUENCE_RADIUS_M
@@ -338,7 +354,8 @@ def calculate_failure_probabilities(conn):
 
 def print_statistics(conn):
     """Print summary statistics of failure probabilities."""
-    with conn.cursor() as cur:
+    # Este cursor SÍ es RealDictCursor, configurado en main()
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
         print("\n" + "="*60)
         print("FAILURE PROBABILITY STATISTICS")
         print("="*60)
@@ -354,10 +371,11 @@ def print_statistics(conn):
         """)
         row = cur.fetchone()
         print(f"\nWays:")
-        print(f"  Total: {row[0]}")
-        print(f"  Affected (fail_prob > 0): {row[1]}")
-        print(f"  Average probability: {row[2]}")
-        print(f"  Maximum probability: {row[3]}")
+        # --- CORRECCIÓN 7: Acceder por nombre de columna ---
+        print(f"  Total: {row['total']}")
+        print(f"  Affected (fail_prob > 0): {row['affected']}")
+        print(f"  Average probability: {row['avg_prob']}")
+        print(f"  Maximum probability: {row['max_prob']}")
         
         # Vertices statistics (if table exists)
         cur.execute("""
@@ -369,7 +387,8 @@ def print_statistics(conn):
             )
         """)
         
-        if cur.fetchone()[0]:
+        # --- CORRECCIÓN 8: Acceder por nombre de columna ['exists'] ---
+        if cur.fetchone()['exists']:
             cur.execute("""
                 SELECT 
                     COUNT(*) as total,
@@ -380,10 +399,11 @@ def print_statistics(conn):
             """)
             row = cur.fetchone()
             print(f"\nVertices:")
-            print(f"  Total: {row[0]}")
-            print(f"  Affected (fail_prob > 0): {row[1]}")
-            print(f"  Average probability: {row[2]}")
-            print(f"  Maximum probability: {row[3]}")
+            # --- CORRECCIÓN 9: Acceder por nombre de columna ---
+            print(f"  Total: {row['total']}")
+            print(f"  Affected (fail_prob > 0): {row['affected']}")
+            print(f"  Average probability: {row['avg_prob']}")
+            print(f"  Maximum probability: {row['max_prob']}")
         
         print("="*60 + "\n")
 
@@ -400,8 +420,12 @@ def main():
         conn = get_db_connection()
         print("✓ Connected to database")
         
-        # Ensure fail_prob columns exist
+        # --- CORRECCIÓN 10: Mover RealDictCursor DESPUÉS de ensure_fail_prob_columns ---
+        # ensure_fail_prob_columns usa cursores estándar (tuplas)
         ensure_fail_prob_columns(conn)
+
+        # Ahora, establecer RealDictCursor para el resto del script
+        conn.cursor_factory = RealDictCursor
         
         # Reset failure probabilities
         reset_failure_probabilities(conn)

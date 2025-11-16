@@ -3,7 +3,7 @@
 """
 Waze fetcher adaptativo:
 - Usa la API moderna de Waze Live Map (tile-based system)
-- Si las APIs fallan, intenta scraping con Selenium WebDriver
+- Si las APIs fallan, intenta scraping con Selenium WebDriver (Firefox)
 - Si WebDriver falla, usa datos de muestra como respaldo final
 - Sistema de tiles basado en zoom levels
 - Si un tile devuelve 404 o error, lo subdivide en 4 (hasta profundidad 2)
@@ -11,7 +11,9 @@ Waze fetcher adaptativo:
 
 Salida: amenazas/waze_incidents.geojson
 
-Requiere: selenium>=4.15.2 para WebDriver (opcional, usa fallback si no está disponible)
+Requiere: 
+  - selenium>=4.15.2 para WebDriver
+  - Firefox y GeckoDriver: Sigue la guía de instalación manual (PPA de Mozilla + descarga de geckodriver)
 """
 import os, json, sys, time, re
 from pathlib import Path
@@ -129,141 +131,277 @@ def load_sample_data()->Dict[str,Any]:
     return {"alerts": [], "jams": [], "irregularities": []}
 
 def fetch_with_webdriver(s,w,n,e)->Dict[str,Any]:
-    """Fetch Waze data using Selenium WebDriver for dynamic content"""
+    """Fetch Waze data using Selenium-Wire to intercept API requests"""
+    # Check for selenium-wire availability first
     try:
-        from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
-        from selenium.webdriver.chrome.service import Service
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.support.ui import WebDriverWait
-        from selenium.webdriver.support import expected_conditions as EC
-        from selenium.common.exceptions import TimeoutException, WebDriverException
-        
+        from seleniumwire import webdriver
+    except ImportError as e:
+        sys.stderr.write(f"[info] selenium-wire not installed. Install with: pip install selenium-wire\n")
+        raise RuntimeError(f"selenium-wire not available. Using fallback data.")
+    
+    # Check for selenium availability
+    try:
+        from selenium.webdriver.firefox.options import Options
+        from selenium.webdriver.firefox.service import Service
+        from selenium.common.exceptions import TimeoutException, WebDriverException, SessionNotCreatedException
+    except ImportError as e:
+        sys.stderr.write(f"[info] selenium package incomplete or missing module: {e}\n")
+        sys.stderr.write(f"[info] Install with: pip install selenium>=4.15.2\n")
+        raise RuntimeError(f"selenium not properly installed. Using fallback data.")
+    
+    try:
         # Calculate center point for the live map URL
         center_lat = (s + n) / 2
         center_lon = (w + e) / 2
         zoom = 13  # Good zoom level for data collection
         
-        # Configure Chrome options for headless mode
-        chrome_options = Options()
-        chrome_options.add_argument('--headless')
-        chrome_options.add_argument('--no-sandbox')
-        chrome_options.add_argument('--disable-dev-shm-usage')
-        chrome_options.add_argument('--disable-gpu')
-        chrome_options.add_argument('--disable-software-rasterizer')
-        chrome_options.add_argument('--disable-extensions')
-        chrome_options.add_argument(f'user-agent={UA["User-Agent"]}')
-        chrome_options.add_argument('--window-size=1920,1080')
+        # Configure Firefox options for headless mode
+        firefox_options = Options()
+        firefox_options.add_argument('-headless')  # Headless mode for containers
+        firefox_options.set_preference('general.useragent.override', UA["User-Agent"])
+        firefox_options.set_preference('permissions.default.image', 2)  # Disable images for faster loading
+        firefox_options.set_preference('dom.webnotifications.enabled', False)  # Disable notifications
         
-        sys.stderr.write(f"[info] Starting WebDriver for tile {s:.4f},{w:.4f},{n:.4f},{e:.4f}\n")
+        # Configure selenium-wire options to capture network traffic
+        seleniumwire_options = {
+            'disable_encoding': True,  # Disable response encoding to get raw data
+            'verify_ssl': False,  # Don't verify SSL certificates (for Waze HTTPS)
+            'suppress_connection_errors': True,  # Suppress connection errors
+        }
         
-        # Initialize WebDriver
-        driver = webdriver.Chrome(options=chrome_options)
-        driver.set_page_load_timeout(TIMEOUT)
+        # Auto-detect Firefox binary location (prioritize esr)
+        firefox_paths = [
+            '/usr/bin/firefox-esr', # <-- Prioridad #1 (PPA de Mozilla)
+            '/usr/bin/firefox',     # <-- Paquete dummy de snap (malo)
+            '/snap/bin/firefox',
+            '/usr/local/bin/firefox',
+            '/usr/local/bin/firefox-esr'
+        ]
+        
+        firefox_binary = None
+        for path in firefox_paths:
+            if os.path.exists(path) and os.access(path, os.X_OK):
+                try:
+                    import subprocess
+                    result = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=2)
+                    if result.returncode == 0 and 'firefox' in result.stdout.lower():
+                        firefox_binary = path
+                        sys.stderr.write(f"[info] Found Firefox at: {path}\n")
+                        break
+                except (FileNotFoundError, subprocess.TimeoutExpired, Exception) as e:
+                    continue
+        
+        if not firefox_binary:
+            for cmd in ['firefox-esr', 'firefox']: # Prioritize esr
+                try:
+                    import subprocess
+                    result = subprocess.run(['which', cmd], capture_output=True, text=True, timeout=2)
+                    if result.returncode == 0:
+                        path = result.stdout.strip()
+                        if path and os.path.exists(path):
+                            firefox_binary = path
+                            sys.stderr.write(f"[info] Found Firefox at: {path}\n")
+                            break
+                except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+                    continue
+        
+        if firefox_binary:
+            firefox_options.binary_location = firefox_binary
+        else:
+            sys.stderr.write(f"[warn] Firefox binary not found. WebDriver may fail or try to download Firefox.\n")
+            sys.stderr.write(f"[warn] Install Firefox: sudo apt-get install firefox-esr\n")
+        
+        sys.stderr.write(f"[info] Starting Firefox WebDriver for tile {s:.4f},{w:.4f},{n:.4f},{e:.4f}\n")
+        
+        # Configure GeckoDriver service
+        service = None
+        try:
+            import subprocess
+            result = subprocess.run(['which', 'geckodriver'], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                geckodriver_path = result.stdout.strip()
+                if geckodriver_path and os.path.exists(geckodriver_path):
+                    service = Service(executable_path=geckodriver_path)
+                    sys.stderr.write(f"[info] Using GeckoDriver at: {geckodriver_path}\n")
+        except Exception:
+            pass # Fallback to Selenium finding it in PATH
         
         try:
-            # Navigate to Waze live map
+            if service:
+                driver = webdriver.Firefox(service=service, options=firefox_options, seleniumwire_options=seleniumwire_options)
+            else:
+                driver = webdriver.Firefox(options=firefox_options, seleniumwire_options=seleniumwire_options)
+            driver.set_page_load_timeout(TIMEOUT)
+            sys.stderr.write(f"[info] Firefox WebDriver with selenium-wire started successfully\n")
+        except SessionNotCreatedException as e:
+            error_msg = str(e)
+            if "geckodriver" in error_msg.lower():
+                sys.stderr.write(f"[ERROR] GeckoDriver not found or incompatible.\n")
+                sys.stderr.write(f"[ERROR] Install: (run manual geckodriver install script)\n")
+            elif "Firefox" in error_msg or "firefox" in error_msg.lower():
+                sys.stderr.write(f"[ERROR] Firefox not properly installed or can't start.\n")
+                sys.stderr.write(f"[ERROR] Install Firefox: (run PPA install script for firefox-esr)\n")
+            else:
+                sys.stderr.write(f"[ERROR] WebDriver session error: {error_msg}\n")
+            raise RuntimeError(f"Firefox not available or misconfigured. Using fallback data.")
+        except WebDriverException as e:
+            error_msg = str(e)
+            sys.stderr.write(f"[ERROR] Firefox WebDriver error: {error_msg}\n")
+            if "geckodriver" in error_msg.lower():
+                sys.stderr.write(f"[ERROR] Install GeckoDriver: (run manual geckodriver install script)\n")
+            raise RuntimeError(f"Firefox WebDriver failed. Using fallback data.")
+        
+        try:
             live_map_url = f"https://www.waze.com/live-map?zoom={zoom}&lat={center_lat}&lon={center_lon}"
+            
+            # Clear previous requests
+            del driver.requests
+            
+            # Navigate to Waze Live Map
+            sys.stderr.write(f"[info] Loading Waze Live Map and intercepting API requests...\n")
             driver.get(live_map_url)
             
-            # Wait for the map to load and data to be available
-            wait = WebDriverWait(driver, 15)
-            time.sleep(3)  # Additional wait for dynamic data loading
+            # Wait for the page to make API calls (5 seconds should be enough)
+            time.sleep(5)
             
-            # Try to extract data from the page
-            # Method 1: Check for embedded JSON in script tags or window objects
-            script = """
-                try {
-                    // Try to find data in various places
-                    if (window.__NEXT_DATA__ && window.__NEXT_DATA__.props) {
-                        return JSON.stringify(window.__NEXT_DATA__.props);
-                    }
-                    if (window.__REDUX_STATE__) {
-                        return JSON.stringify(window.__REDUX_STATE__);
-                    }
-                    // Try to get from any exposed data objects
-                    if (window.WazeData) {
-                        return JSON.stringify(window.WazeData);
-                    }
-                    return null;
-                } catch(e) {
-                    return null;
-                }
-            """
+            # Intercept and extract data from API requests
+            sys.stderr.write(f"[info] Analyzing {len(driver.requests)} intercepted requests...\n")
             
-            data_json = driver.execute_script(script)
+            extracted_data = {"alerts": [], "jams": [], "irregularities": []}
+            unique_uuids = set()
             
-            if data_json:
-                data = json.loads(data_json)
-                
-                # Extract alerts, jams, and irregularities from the data structure
-                extracted_data = {"alerts": [], "jams": [], "irregularities": []}
-                
-                # Navigate through the data structure to find alerts/jams
-                def extract_from_dict(obj, depth=0):
-                    if depth > 10:  # Prevent infinite recursion
-                        return
+            # Waze API endpoints to look for
+            waze_endpoints = [
+                '/row-',  # Row-based grid data
+                '/Descartes-live/',  # Live traffic data
+                '/rtserver/',  # Real-time server data
+                '/georss',  # GeoRSS feeds
+                '/RoutingRequest',  # Routing requests sometimes contain alerts
+            ]
+            
+            # Analyze intercepted requests
+            for request in driver.requests:
+                try:
+                    # Check if this is a Waze API request with a response
+                    if not request.response or 'waze.com' not in request.url:
+                        continue
                     
-                    if isinstance(obj, dict):
-                        # Look for arrays that might contain alerts or jams
-                        if "alerts" in obj and isinstance(obj["alerts"], list):
-                            extracted_data["alerts"].extend(obj["alerts"])
-                        if "jams" in obj and isinstance(obj["jams"], list):
-                            extracted_data["jams"].extend(obj["jams"])
-                        if "irregularities" in obj and isinstance(obj["irregularities"], list):
-                            extracted_data["irregularities"].extend(obj["irregularities"])
+                    # Check if URL matches any Waze API endpoints
+                    is_waze_api = any(endpoint in request.url for endpoint in waze_endpoints)
+                    if not is_waze_api:
+                        continue
+                    
+                    # Only process successful responses
+                    if request.response.status_code != 200:
+                        continue
+                    
+                    sys.stderr.write(f"[info] Found Waze API request: {request.url[:80]}...\n")
+                    
+                    # Try to parse the response body as JSON
+                    try:
+                        response_body = request.response.body
+                        if isinstance(response_body, bytes):
+                            response_body = response_body.decode('utf-8')
                         
-                        # Recursively search
-                        for value in obj.values():
-                            extract_from_dict(value, depth + 1)
-                    elif isinstance(obj, list):
-                        for item in obj:
-                            extract_from_dict(item, depth + 1)
+                        data = json.loads(response_body)
+                        
+                        # Extract alerts
+                        if "alerts" in data:
+                            alerts = data["alerts"]
+                            if isinstance(alerts, list):
+                                for alert in alerts:
+                                    if isinstance(alert, dict) and alert.get("uuid"):
+                                        if alert["uuid"] not in unique_uuids:
+                                            unique_uuids.add(alert["uuid"])
+                                            extracted_data["alerts"].append(alert)
+                            elif isinstance(alerts, dict):
+                                for alert in alerts.values():
+                                    if isinstance(alert, dict) and alert.get("uuid"):
+                                        if alert["uuid"] not in unique_uuids:
+                                            unique_uuids.add(alert["uuid"])
+                                            extracted_data["alerts"].append(alert)
+                        
+                        # Extract jams
+                        if "jams" in data:
+                            jams = data["jams"]
+                            if isinstance(jams, list):
+                                for jam in jams:
+                                    if isinstance(jam, dict) and jam.get("uuid"):
+                                        if jam["uuid"] not in unique_uuids:
+                                            unique_uuids.add(jam["uuid"])
+                                            extracted_data["jams"].append(jam)
+                            elif isinstance(jams, dict):
+                                for jam in jams.values():
+                                    if isinstance(jam, dict) and jam.get("uuid"):
+                                        if jam["uuid"] not in unique_uuids:
+                                            unique_uuids.add(jam["uuid"])
+                                            extracted_data["jams"].append(jam)
+                        
+                        # Extract irregularities
+                        if "irregularities" in data:
+                            irrs = data["irregularities"]
+                            if isinstance(irrs, list):
+                                for irr in irrs:
+                                    if isinstance(irr, dict) and irr.get("uuid"):
+                                        if irr["uuid"] not in unique_uuids:
+                                            unique_uuids.add(irr["uuid"])
+                                            extracted_data["irregularities"].append(irr)
+                            elif isinstance(irrs, dict):
+                                for irr in irrs.values():
+                                    if isinstance(irr, dict) and irr.get("uuid"):
+                                        if irr["uuid"] not in unique_uuids:
+                                            unique_uuids.add(irr["uuid"])
+                                            extracted_data["irregularities"].append(irr)
+                    
+                    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                        # Not JSON or not decodable, skip
+                        continue
                 
-                extract_from_dict(data)
-                
-                # Filter by bounding box
-                filtered_data = {"alerts": [], "jams": [], "irregularities": []}
-                
-                for alert in extracted_data.get("alerts", []):
-                    loc = alert.get("location", {})
-                    lat = loc.get("y") or loc.get("lat")
-                    lon = loc.get("x") or loc.get("lon")
-                    if lat and lon and s <= lat <= n and w <= lon <= e:
-                        filtered_data["alerts"].append(alert)
-                
-                for jam in extracted_data.get("jams", []):
-                    line = jam.get("line", [])
-                    if any(s <= p.get("y", 0) <= n and w <= p.get("x", 0) <= e for p in line):
-                        filtered_data["jams"].append(jam)
-                
-                for irr in extracted_data.get("irregularities", []):
-                    seg = irr.get("seg", {})
-                    lat = seg.get("y") or seg.get("lat")
-                    lon = seg.get("x") or seg.get("lon")
-                    if lat and lon and s <= lat <= n and w <= lon <= e:
-                        filtered_data["irregularities"].append(irr)
-                
-                if any(filtered_data.values()):
-                    sys.stderr.write(f"[ok] WebDriver extracted {len(filtered_data['alerts'])} alerts, {len(filtered_data['jams'])} jams\n")
-                    return filtered_data
+                except Exception as e:
+                    # Skip this request if there's any error
+                    continue
+            
+            sys.stderr.write(f"[info] Extracted from API: {len(extracted_data['alerts'])} alerts, {len(extracted_data['jams'])} jams\n")
+            
+            # Filter by bounding box
+            filtered_data = {"alerts": [], "jams": [], "irregularities": []}
+            
+            for alert in extracted_data.get("alerts", []):
+                loc = alert.get("location", {})
+                lat = loc.get("y") or loc.get("lat")
+                lon = loc.get("x") or loc.get("lon")
+                if lat and lon and s <= lat <= n and w <= lon <= e:
+                    filtered_data["alerts"].append(alert)
+            
+            for jam in extracted_data.get("jams", []):
+                line = jam.get("line", [])
+                if any(s <= p.get("y", 0) <= n and w <= p.get("x", 0) <= e for p in line if isinstance(p, dict)):
+                    filtered_data["jams"].append(jam)
+            
+            for irr in extracted_data.get("irregularities", []):
+                seg = irr.get("seg", {}) or irr.get("location", {})
+                lat = seg.get("y") or seg.get("lat")
+                lon = seg.get("x") or seg.get("lon")
+                if lat and lon and s <= lat <= n and w <= lon <= e:
+                    filtered_data["irregularities"].append(irr)
+
+            if any(filtered_data.values()):
+                sys.stderr.write(f"[ok] Selenium-wire extracted {len(filtered_data['alerts'])} alerts, {len(filtered_data['jams'])} jams\n")
+                return filtered_data
             
             # If no data found, return empty
-            sys.stderr.write(f"[warn] WebDriver could not extract data from page\n")
-            raise RuntimeError("No data extracted via WebDriver")
+            sys.stderr.write(f"[warn] Selenium-wire could not extract data from intercepted API requests\n")
+            raise RuntimeError("No data extracted via selenium-wire")
             
         finally:
             driver.quit()
     
-    except ImportError as e:
-        sys.stderr.write(f"[warn] Selenium not available: {e}\n")
-        raise RuntimeError(f"Selenium not installed: {e}")
-    except WebDriverException as e:
-        sys.stderr.write(f"[warn] WebDriver error: {e}\n")
-        raise RuntimeError(f"Browser automation failed (WebDriver): {e}")
+    except (WebDriverException, SessionNotCreatedException) as e:
+        # More specific error message already logged above
+        raise RuntimeError(f"WebDriver unavailable. Using fallback data.")
     except Exception as e:
         sys.stderr.write(f"[warn] WebDriver fetch failed: {e}\n")
-        raise RuntimeError(f"WebDriver fetch failed: {e}")
+        raise RuntimeError(f"WebDriver failed. Using fallback data.")
 
 def fetch_box(s,w,n,e)->Dict[str,Any]:
     """Fetch Waze data for a bounding box using modern API endpoints, WebDriver, and sample data as fallback"""
@@ -299,7 +437,11 @@ def fetch_box(s,w,n,e)->Dict[str,Any]:
                         data = r.json()
                         # Check if we got valid data
                         if data and isinstance(data, dict):
-                            return data
+                            # Filtro extra, a veces la API devuelve datos vacíos
+                            if data.get("alerts") or data.get("jams") or data.get("irregularities"):
+                                return data
+                            else:
+                                last_error = "API returned empty (no alerts/jams)"
                     except Exception as je:
                         last_error = f"JSON parse error: {je}"
                         pass
@@ -319,15 +461,25 @@ def fetch_box(s,w,n,e)->Dict[str,Any]:
         if webdriver_data and (webdriver_data.get("alerts") or webdriver_data.get("jams")):
             return webdriver_data
     except Exception as ex:
-        last_error = f"WebDriver also failed: {ex}"
-        sys.stderr.write(f"[warn] {last_error}\n")
+        last_error = str(ex)
+        # Error messages already logged in fetch_with_webdriver
+        if "WebDriver unavailable" in last_error:
+            sys.stderr.write(f"[info] WebDriver not available (Firefox/GeckoDriver issue). Falling back to sample data.\n")
+        elif "selenium-wire not available" in last_error:
+            sys.stderr.write(f"[info] selenium-wire not available. Falling back to sample data.\n")
+        elif "selenium not properly installed" in last_error:
+            sys.stderr.write(f"[info] selenium package not properly installed. Falling back to sample data.\n")
+        else:
+            sys.stderr.write(f"[info] WebDriver scraping failed. Falling back to sample data.\n")
     
     # If WebDriver also failed, use sample data as final fallback
-    sys.stderr.write(f"[info] Using sample data as final fallback\n")
+    sys.stderr.write(f"[OK] Using sample data from amenazas_muestra.geojson\n")
     sample_data = load_sample_data()
     if sample_data and (sample_data.get("alerts") or sample_data.get("jams")):
+        sys.stderr.write(f"[OK] Loaded {len(sample_data.get('alerts', []))} sample alerts, {len(sample_data.get('jams', []))} sample jams\n")
         return sample_data
     
+    sys.stderr.write(f"[ERROR] All data sources failed and no sample data available\n")
     raise RuntimeError(last_error if last_error else "Unknown error")
 
 def to_features(ch:Dict[str,Any])->List[Dict[str,Any]]:
