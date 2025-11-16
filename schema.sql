@@ -1,157 +1,213 @@
--- ===============================
--- SCHEMA COMPLETO: rr
--- Incluye infraestructura, metadata y amenazas
--- ===============================
+-- =========================================================
+--  Esquema base para Fase 2 - Ruteo resiliente (RM, Chile)
+--  Infraestructura OSM + Metadatas + Amenazas
+--  Compatible con los loaders y scripts que vienes usando
+-- =========================================================
 
+-- 1) Extensiones necesarias
 CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE EXTENSION IF NOT EXISTS pgrouting;
 
--- Esquema de trabajo
+-- 2) Esquema lógico
 CREATE SCHEMA IF NOT EXISTS rr;
+SET search_path TO rr, public;
 
--- ======================================
--- 1) Infraestructura base (OSM)
--- ======================================
+-- =========================================================
+-- 3) Infraestructura OSM
+--    - nodes: puntos (nodos de la red)
+--    - ways:  aristas (tramos viales)
+--      * id = id interno único por tramo (PK)
+--      * osm_id = id del way OSM (no único: un way puede trozarse)
+--      * source/target = ids de vértices para pgRouting
+-- =========================================================
 
--- Nodos
+-- 3.1 Nodos
 CREATE TABLE IF NOT EXISTS rr.nodes (
-    id BIGINT PRIMARY KEY,
-    geom geometry(Point, 4326) NOT NULL
+  id   BIGINT PRIMARY KEY,
+  geom geometry(Point, 4326) NOT NULL
 );
+CREATE INDEX IF NOT EXISTS nodes_gix ON rr.nodes USING GIST (geom);
 
--- Aristas (calles)
+-- 3.2 Aristas
 CREATE TABLE IF NOT EXISTS rr.ways (
-    id BIGINT PRIMARY KEY,
-    osm_id BIGINT,
-    source BIGINT,
-    target BIGINT,
-    geom geometry(LineString, 4326),
-    length_m DOUBLE PRECISION,
-    highway TEXT,
-    oneway TEXT,                  -- antes era BOOLEAN, ahora TEXT para reflejar 'yes', 'no', '-1', etc.
-    maxspeed_kmh INTEGER,
-    lanes INTEGER,
-    surface TEXT,
-    access TEXT,
-    width_m NUMERIC,              -- ancho real de la vía (estimado o reportado)
-    maxwidth_m NUMERIC,           -- restricción máxima de paso (vehículos grandes)
-    tags JSONB
+  id            BIGINT PRIMARY KEY,
+  osm_id        BIGINT,
+  source        BIGINT,
+  target        BIGINT,
+  geom          geometry(LineString, 4326) NOT NULL,
+  length_m      NUMERIC,              -- calculada con ST_LengthSpheroid
+  highway       TEXT,
+  oneway        BOOLEAN,              -- puede ser NULL si se desconoce
+  maxspeed_kmh  INTEGER,
+  lanes         INTEGER,
+  surface       TEXT,
+  access        TEXT,
+  tags          JSONB,                -- tags crudos OSM y otros
+  width_m       NUMERIC,              -- ancho estimado/medido (m)
+  maxwidth_m    NUMERIC               -- restricción de ancho (m)
 );
 
-CREATE INDEX IF NOT EXISTS idx_nodes_geom ON rr.nodes USING GIST (geom);
-CREATE INDEX IF NOT EXISTS idx_ways_geom ON rr.ways USING GIST (geom);
+-- Índices recomendados para routing/consultas
+CREATE INDEX IF NOT EXISTS ways_geom_gix    ON rr.ways USING GIST (geom);
+CREATE INDEX IF NOT EXISTS ways_source_idx  ON rr.ways (source);
+CREATE INDEX IF NOT EXISTS ways_target_idx  ON rr.ways (target);
+CREATE INDEX IF NOT EXISTS ways_osm_id_idx  ON rr.ways (osm_id);
+CREATE INDEX IF NOT EXISTS ways_hw_idx      ON rr.ways (highway);
+CREATE INDEX IF NOT EXISTS ways_tags_gin    ON rr.ways USING GIN (tags);
 
--- ======================================
--- 2) Metadata
--- ======================================
+-- Nota: la tabla ways_vertices_pgr será creada por pgr_createTopology en tiempo de ejecución.
+-- Ejemplo (no se ejecuta aquí):
+-- SELECT pgr_createTopology('rr.ways', 0.0001, 'geom', 'id');
+-- ALTER TABLE rr.ways_vertices_pgr ADD COLUMN IF NOT EXISTS geom geometry(Point,4326);
+-- UPDATE rr.ways_vertices_pgr SET geom = ST_SetSRID(ST_MakePoint(x, y), 4326);
+-- CREATE INDEX IF NOT EXISTS ways_vertices_gix ON rr.ways_vertices_pgr USING GIST (geom);
 
--- Ancho de vías (valores originales de OSM u otras fuentes)
+-- =========================================================
+-- 4) Metadata
+--    4.1 Anchos de vía (OSM)
+--    4.2 Sentido de vía (oneway)
+--    4.3 Hidrantes (SISS + OSM fusionables por script)
+-- =========================================================
+
+-- 4.1 Metadata widths (un registro por OSM way id)
 CREATE TABLE IF NOT EXISTS rr.metadata_widths (
-    osm_id BIGINT PRIMARY KEY,
-    width_m NUMERIC,
-    maxwidth_m NUMERIC,
-    source TEXT,
-    tags JSONB
+  osm_id        BIGINT PRIMARY KEY,
+  highway       TEXT,
+  lanes         INTEGER,
+  width_raw     TEXT,     -- texto crudo (ej. "7 m", "12 ft")
+  maxwidth_raw  TEXT,     -- texto crudo
+  width_m       NUMERIC,  -- en metros (parseado/estimado)
+  maxwidth_m    NUMERIC,  -- en metros
+  geom          geometry(LineString, 4326),
+  props         JSONB,
+  created_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS md_widths_geom_gix ON rr.metadata_widths USING GIST (geom);
+CREATE INDEX IF NOT EXISTS md_widths_gin      ON rr.metadata_widths USING GIN (props);
 
--- Oneway (para reflejar directamente los valores de OSM)
+-- 4.2 Metadata oneway
 CREATE TABLE IF NOT EXISTS rr.metadata_oneway (
-    osm_id BIGINT PRIMARY KEY,
-    oneway TEXT,
-    source TEXT,
-    tags JSONB
+  osm_id   BIGINT PRIMARY KEY,
+  oneway   BOOLEAN,
+  geom     geometry(LineString, 4326)
 );
+CREATE INDEX IF NOT EXISTS md_oneway_geom_gix ON rr.metadata_oneway USING GIST (geom);
 
--- Hidrantes (de OSM o SISS)
+-- 4.3 Metadata hidrantes
 CREATE TABLE IF NOT EXISTS rr.metadata_hydrants (
-    id SERIAL PRIMARY KEY,
-    ext_id TEXT,
-    geom geometry(Point, 4326),
-    estado TEXT,          -- vigente, fuera de servicio, desconocido, etc.
-    fuente TEXT,
-    tags JSONB
+  ext_id    TEXT PRIMARY KEY,              -- id externo (SISS o compuesto)
+  status    TEXT,                          -- "vigente", "no_operativo", etc.
+  provider  TEXT,                          -- "SISS", "OSM", etc.
+  props     JSONB,                         -- todos los campos crudos normalizados
+  geom      geometry(Point, 4326) NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS md_hydrants_geom_gix ON rr.metadata_hydrants USING GIST (geom);
+CREATE INDEX IF NOT EXISTS md_hydrants_gin      ON rr.metadata_hydrants USING GIN (props);
 
--- Inspecciones de SISS
-CREATE TABLE IF NOT EXISTS rr.metadata_hydrants_siss (
-    id SERIAL PRIMARY KEY,
-    ext_id TEXT,
-    geom geometry(Point, 4326),
-    estado_uso TEXT,
-    fecha_vigencia DATE,
-    observaciones TEXT,
-    fuente TEXT DEFAULT 'SISS',
-    raw JSONB
-);
+-- (Opcional) Vista de conteos por estado
+-- CREATE VIEW rr.v_hydrants_status_counts AS
+-- SELECT status, COUNT(*) AS n FROM rr.metadata_hydrants GROUP BY status;
 
--- ======================================
--- 3) Amenazas
--- ======================================
+-- =========================================================
+-- 5) Amenazas
+--    5.1 Waze (incidentes, cierres, atochamientos)
+--    5.2 Traffic calming (lomos de toro, chicanes, etc.)
+--    5.3 Clima (celdas OpenWeather con severidad)
+-- =========================================================
 
--- Reductores de velocidad (lomos de toro, badenes)
-CREATE TABLE IF NOT EXISTS rr.amenazas_calming (
-    id SERIAL PRIMARY KEY,
-    geom geometry(Point, 4326),
-    tipo TEXT,
-    severidad INTEGER,          -- intensidad del elemento (ej: altura del lomo)
-    impacto_critico INTEGER,    -- qué tanto afecta a la misión de bomberos
-    fuente TEXT,
-    tags JSONB
-);
-
--- Incidentes de tráfico (Waze u otra fuente)
+-- 5.1 Amenazas Waze
 CREATE TABLE IF NOT EXISTS rr.amenazas_waze (
-    id SERIAL PRIMARY KEY,
-    ext_id TEXT,
-    geom geometry(Point, 4326),
-    tipo TEXT,
-    severidad INTEGER,          -- gravedad reportada por la API
-    impacto_critico INTEGER,    -- qué tanto impacta a la misión
-    fuente TEXT,
-    raw JSONB
+  ext_id    TEXT PRIMARY KEY,               -- id único del evento/alerta
+  kind      TEXT,                           -- "incident"
+  subtype   TEXT,                           -- "CLOSURE", "TRAFFIC_JAM", "IRREGULARITY", etc.
+  severity  INTEGER,                        -- 0..N (heurística del loader)
+  props     JSONB,                          -- objeto crudo enriquecido
+  geom      geometry(Geometry, 4326) NOT NULL, -- Point o LineString
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS am_waze_geom_gix ON rr.amenazas_waze USING GIST (geom);
+CREATE INDEX IF NOT EXISTS am_waze_gin      ON rr.amenazas_waze USING GIN (props);
 
--- Clima adverso (OpenWeather u otra fuente)
-CREATE TABLE IF NOT EXISTS rr.amenazas_weather (
-    id SERIAL PRIMARY KEY,
-    geom geometry(Point, 4326),
-    evento TEXT,                -- lluvia, viento, tormenta, etc.
-    severidad INTEGER,          -- intensidad (mm/h de lluvia, m/s de viento, etc.)
-    impacto_critico INTEGER,    -- impacto sobre movilidad
-    fuente TEXT,
-    raw JSONB
+-- 5.2 Amenazas Traffic Calming (OSM)
+CREATE TABLE IF NOT EXISTS rr.amenazas_calming (
+  ext_id    TEXT PRIMARY KEY,               -- id compuesto (ej. "tc:osm_id")
+  kind      TEXT,                           -- "traffic_calming"
+  subtype   TEXT,                           -- "bump", "hump", "table", etc.
+  severity  INTEGER,                        -- típica = 1
+  props     JSONB,
+  geom      geometry(Point, 4326) NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS am_calming_geom_gix ON rr.amenazas_calming USING GIST (geom);
+CREATE INDEX IF NOT EXISTS am_calming_gin      ON rr.amenazas_calming USING GIN (props);
 
--- ======================================
--- 4) Vistas útiles
--- ======================================
+-- 5.3 Amenazas Clima (OpenWeather)
+CREATE TABLE IF NOT EXISTS rr.amenazas_clima (
+  ext_id    TEXT PRIMARY KEY,               -- ej. "ow:<lat>,<lon>"
+  kind      TEXT,                           -- "weather"
+  subtype   TEXT,                           -- "RAIN_WIND" u otros
+  severity  INTEGER,                        -- 0..N (según umbrales)
+  props     JSONB,                          -- incluye metrics: rain_mm_h, wind_ms, ts, etc.
+  geom      geometry(Polygon, 4326) NOT NULL, -- celda cubierta
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS am_clima_geom_gix ON rr.amenazas_clima USING GIST (geom);
+CREATE INDEX IF NOT EXISTS am_clima_gin      ON rr.amenazas_clima USING GIN (props);
+CREATE INDEX IF NOT EXISTS am_waze_geom_gix ON rr.amenazas_waze USING GIST (geom);
+CREATE INDEX IF NOT EXISTS am_waze_gin      ON rr.amenazas_waze USING GIN (props);
 
--- Vista para ruteo con pgRouting, interpretando oneway
-CREATE OR REPLACE VIEW rr.ways_routing AS
-SELECT
-    id,
-    source,
-    target,
-    length_m AS cost,
-    CASE
-        WHEN oneway = 'yes'  THEN -1    -- prohibido el sentido contrario
-        WHEN oneway = '-1'   THEN length_m
-        ELSE length_m
-    END AS reverse_cost,
-    geom
-FROM rr.ways;
+-- 5.2 Amenazas Traffic Calming (OSM)
+CREATE TABLE IF NOT EXISTS rr.amenazas_calming (
+  ext_id    TEXT PRIMARY KEY,               -- id compuesto (ej. "tc:osm_id")
+  kind      TEXT,                           -- "traffic_calming"
+  subtype   TEXT,                           -- "bump", "hump", "table", etc.
+  severity  INTEGER,                        -- típica = 1
+  props     JSONB,
+  geom      geometry(Point, 4326) NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS am_calming_geom_gix ON rr.amenazas_calming USING GIST (geom);
+CREATE INDEX IF NOT EXISTS am_calming_gin      ON rr.amenazas_calming USING GIN (props);
 
--- 1. Añade la columna para la probabilidad de falla (Req #4)
--- La calcularemos como un valor normalizado (0.0 a 1.0)
-ALTER TABLE rr.ways
-ADD COLUMN IF NOT EXISTS prob_falla FLOAT DEFAULT 0.0;
+-- 5.3 Amenazas Clima (OpenWeather)
+CREATE TABLE IF NOT EXISTS rr.amenazas_clima (
+  ext_id    TEXT PRIMARY KEY,               -- ej. "ow:<lat>,<lon>"
+  kind      TEXT,                           -- "weather"
+  subtype   TEXT,                           -- "RAIN_WIND" u otros
+  severity  INTEGER,                        -- 0..N (según umbrales)
+  props     JSONB,                          -- incluye metrics: rain_mm_h, wind_ms, ts, etc.
+  geom      geometry(Polygon, 4326) NOT NULL, -- celda cubierta
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS am_clima_geom_gix ON rr.amenazas_clima USING GIST (geom);
+CREATE INDEX IF NOT EXISTS am_clima_gin      ON rr.amenazas_clima USING GIN (props);
 
--- 2. Añade la columna para la penalización por costo de amenaza
--- Aquí guardaremos el 'costo' extra de una amenaza
-ALTER TABLE rr.ways
-ADD COLUMN IF NOT EXISTS costo_amenaza FLOAT DEFAULT 0.0;
+-- =========================================================
+-- 6) Sugerencias de integridad / utilidades
+-- =========================================================
 
--- 3. Añade la columna para el costo final ponderado (Req #5c)
--- Este será: (costo_distancia * W1) + (costo_amenaza * W2)
-ALTER TABLE rr.ways
-ADD COLUMN IF NOT EXISTS costo_combinado FLOAT;
+-- (Opcional) Garantizar que rr.ways.length_m esté calculado
+-- UPDATE rr.ways
+-- SET length_m = ST_LengthSpheroid(geom, 'SPHEROID["WGS 84",6378137,298.257223563]')
+-- WHERE length_m IS NULL;
+
+-- (Opcional) Sincronizar oneway desde metadata_oneway cuando se cargue:
+-- UPDATE rr.ways w
+--    SET oneway = m.oneway
+--   FROM rr.metadata_oneway m
+--  WHERE w.id = m.osm_id AND m.oneway IS NOT NULL;
+
+-- (Opcional) Aplicar width_m / maxwidth_m desde metadata_widths cuando se cargue:
+-- UPDATE rr.ways w
+--    SET width_m    = COALESCE(m.width_m, w.width_m),
+--        maxwidth_m = COALESCE(m.maxwidth_m, w.maxwidth_m)
+--   FROM rr.metadata_widths m
+--  WHERE w.osm_id = m.osm_id;
+
+-- =========================================================
+-- 7) Notas
+--  - Usa pgr_createTopology para construir rr.ways_vertices_pgr (no se crea aquí).
+--  - Los índices GIST/GiN están pensados para consultas espaciales y filtros por props/tags.
+--  - Las tablas de amenazas usan PK por ext_id para permitir UPSERT con deduplicación previa.
+-- =========================================================

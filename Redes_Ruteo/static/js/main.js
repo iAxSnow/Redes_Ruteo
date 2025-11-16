@@ -3,8 +3,11 @@
 // Global variables
 let map;
 let threatsLayer;
+let hydrantsLayer;
 let userMarker;
 let threatsData = null;
+let hydrantsData = null;
+let hydrantsVisible = false;
 let threatVisibility = {
     waze: true,
     weather: true,
@@ -47,6 +50,9 @@ function initMap() {
     
     // Initialize threats layer group
     threatsLayer = L.layerGroup().addTo(map);
+    
+    // Initialize hydrants layer group (not added to map initially)
+    hydrantsLayer = L.layerGroup();
     
     // Add click handler for route point selection
     map.on('click', onMapClick);
@@ -358,6 +364,182 @@ function updateStats(data) {
     statsInfo.innerHTML = statsHtml;
 }
 
+// Load hydrants data from API
+function loadHydrants() {
+    const hydrantsInfo = document.getElementById('hydrants-info');
+    hydrantsInfo.innerHTML = '<p style="font-size: 12px; color: #666;">Cargando hidrantes...</p>';
+    
+    fetch('/api/hydrants')
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            hydrantsData = data;
+            displayHydrants();
+            updateHydrantsInfo(data);
+            console.log(`Loaded ${data.features.length} hydrants`);
+        })
+        .catch(error => {
+            console.error('Error loading hydrants:', error);
+            hydrantsInfo.innerHTML = '<p style="font-size: 12px; color: red;">Error al cargar hidrantes</p>';
+        });
+}
+
+// Display hydrants on the map
+function displayHydrants() {
+    // Clear existing hydrants
+    hydrantsLayer.clearLayers();
+    
+    if (!hydrantsData || !hydrantsData.features || hydrantsData.features.length === 0) {
+        console.log('No hydrants to display');
+        return;
+    }
+    
+    // Count by status
+    const counts = {
+        functional: 0,
+        not_functional: 0,
+        unknown: 0
+    };
+    
+    // Add GeoJSON layer with custom styling
+    L.geoJSON(hydrantsData, {
+        pointToLayer: function(feature, latlng) {
+            const props = feature.properties;
+            const functionalStatus = props.functional_status || 'unknown';
+            
+            // Count by status
+            counts[functionalStatus]++;
+            
+            // Determine color based on status
+            let color;
+            if (functionalStatus === 'functional') {
+                color = '#2ecc71';  // Green for functional
+            } else if (functionalStatus === 'not_functional') {
+                color = '#e74c3c';  // Red for not functional
+            } else {
+                color = '#95a5a6';  // Gray for unknown
+            }
+            
+            return L.circleMarker(latlng, {
+                radius: 6,
+                fillColor: color,
+                color: color,
+                weight: 2,
+                opacity: 0.9,
+                fillOpacity: 0.7
+            });
+        },
+        onEachFeature: function(feature, layer) {
+            const props = feature.properties;
+            
+            // Build popup content
+            let popupContent = `<div class="hydrant-popup">`;
+            popupContent += `<h4>Hidrante</h4>`;
+            
+            if (props.ext_id) {
+                popupContent += `<p><strong>ID:</strong> ${props.ext_id}</p>`;
+            }
+            
+            if (props.status) {
+                const statusClass = props.functional_status === 'functional' ? 'status-functional' : 
+                                   props.functional_status === 'not_functional' ? 'status-not-functional' : 
+                                   'status-unknown';
+                popupContent += `<p><strong>Estado:</strong> <span class="${statusClass}">${props.status}</span></p>`;
+            }
+            
+            if (props.provider) {
+                popupContent += `<p><strong>Proveedor:</strong> ${props.provider}</p>`;
+            }
+            
+            // Add other relevant properties from the props object
+            if (props.UBICACION) {
+                popupContent += `<p><strong>Ubicación:</strong> ${props.UBICACION}</p>`;
+            }
+            
+            if (props.MODELO) {
+                popupContent += `<p><strong>Modelo:</strong> ${props.MODELO}</p>`;
+            }
+            
+            if (props.DIAMETRO_NOMINAL) {
+                popupContent += `<p><strong>Diámetro:</strong> ${props.DIAMETRO_NOMINAL}</p>`;
+            }
+            
+            popupContent += `</div>`;
+            
+            layer.bindPopup(popupContent);
+        }
+    }).addTo(hydrantsLayer);
+    
+    console.log(`Displayed hydrants - Functional: ${counts.functional}, Not Functional: ${counts.not_functional}, Unknown: ${counts.unknown}`);
+}
+
+// Update hydrants info display
+function updateHydrantsInfo(data) {
+    const hydrantsInfo = document.getElementById('hydrants-info');
+    
+    if (!data || !data.features) {
+        hydrantsInfo.innerHTML = '<p style="font-size: 12px; color: #666;">No hay datos disponibles</p>';
+        return;
+    }
+    
+    // Count by functional status
+    const counts = {
+        functional: 0,
+        not_functional: 0,
+        unknown: 0,
+        total: data.features.length
+    };
+    
+    data.features.forEach(feature => {
+        const functionalStatus = feature.properties.functional_status || 'unknown';
+        if (counts[functionalStatus] !== undefined) {
+            counts[functionalStatus]++;
+        }
+    });
+    
+    // Build info HTML
+    let infoHtml = '<div style="font-size: 12px; color: #666; margin-top: 5px;">';
+    infoHtml += `<div>Total: ${counts.total}</div>`;
+    infoHtml += `<div><span style="color: #2ecc71;">●</span> Funcionales: ${counts.functional}</div>`;
+    infoHtml += `<div><span style="color: #e74c3c;">●</span> No funcionales: ${counts.not_functional}</div>`;
+    if (counts.unknown > 0) {
+        infoHtml += `<div><span style="color: #95a5a6;">●</span> Desconocido: ${counts.unknown}</div>`;
+    }
+    infoHtml += '</div>';
+    
+    hydrantsInfo.innerHTML = infoHtml;
+}
+
+// Toggle hydrants visibility
+function toggleHydrants() {
+    const btn = document.getElementById('toggle-hydrants-btn');
+    const legend = document.getElementById('hydrants-legend');
+    
+    if (hydrantsVisible) {
+        // Hide hydrants
+        map.removeLayer(hydrantsLayer);
+        hydrantsVisible = false;
+        btn.textContent = '🚰 Mostrar Hidrantes';
+        legend.style.display = 'none';
+        console.log('Hydrants hidden');
+    } else {
+        // Show hydrants
+        if (!hydrantsData) {
+            // Load hydrants if not already loaded
+            loadHydrants();
+        }
+        map.addLayer(hydrantsLayer);
+        hydrantsVisible = true;
+        btn.textContent = '🚰 Ocultar Hidrantes';
+        legend.style.display = 'block';
+        console.log('Hydrants shown');
+    }
+}
+
 // Map click handler for route point selection
 function onMapClick(e) {
     const lat = e.latlng.lat;
@@ -471,28 +653,33 @@ function calculateRoute() {
         let allBounds = [];
         Object.keys(data).forEach(algorithmKey => {
             const routeData = data[algorithmKey];
-            if (routeData && routeData.route_geojson && routeData.route_geojson.geometry && routeData.route_geojson.geometry.coordinates && routeData.route_geojson.geometry.coordinates.length > 0) {
+            // Check if we have valid route data with geometry
+            if (routeData && routeData.route_geojson && routeData.route_geojson.geometry) {
                 const checkbox = document.getElementById(`show-${algorithmKey.replace(/_/g, '-')}`);
                 const isVisible = checkbox ? checkbox.checked : true;
                 
-                const layer = L.geoJSON(routeData.route_geojson, {
-                    style: {
-                        color: routeColors[algorithmKey],
-                        weight: 4,
-                        opacity: isVisible ? 0.7 : 0
+                try {
+                    const layer = L.geoJSON(routeData.route_geojson, {
+                        style: {
+                            color: routeColors[algorithmKey],
+                            weight: 4,
+                            opacity: isVisible ? 0.7 : 0
+                        }
+                    });
+                    
+                    if (isVisible) {
+                        layer.addTo(map);
+                        // Only add bounds for visible routes
+                        const bounds = layer.getBounds();
+                        if (bounds.isValid()) {
+                            allBounds.push(bounds);
+                        }
                     }
-                });
-                
-                if (isVisible) {
-                    layer.addTo(map);
-                    // Only add bounds for visible routes
-                    const bounds = layer.getBounds();
-                    if (bounds.isValid()) {
-                        allBounds.push(bounds);
-                    }
+                    
+                    routeLayers[algorithmKey] = layer;
+                } catch (error) {
+                    console.error(`Error rendering ${algorithmKey} route:`, error);
                 }
-                
-                routeLayers[algorithmKey] = layer;
             }
         });
         
@@ -516,10 +703,11 @@ function calculateRoute() {
         
         // Display route info only for selected algorithms
         let routeInfoHtml = '<h4>Resultados de Ruteo</h4>';
+        let routesDisplayed = 0;
         
         Object.keys(data).forEach(algorithmKey => {
             const routeData = data[algorithmKey];
-            if (routeData && routeData.route_geojson) {
+            if (routeData && routeData.route_geojson && routeData.route_geojson.properties) {
                 const checkbox = document.getElementById(`show-${algorithmKey.replace(/_/g, '-')}`);
                 const isVisible = checkbox ? checkbox.checked : true;
                 
@@ -533,9 +721,14 @@ function calculateRoute() {
                             <span class="metric-value">${lengthKm} km (${routeData.compute_time_ms.toFixed(2)} ms)</span>
                         </div>
                     `;
+                    routesDisplayed++;
                 }
             }
         });
+        
+        if (routesDisplayed === 0) {
+            routeInfoHtml += '<p style="color: orange;">No se encontraron rutas o todas están ocultas</p>';
+        }
         
         routeInfo.innerHTML = routeInfoHtml;
         
@@ -614,6 +807,9 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Location button
     document.getElementById('locate-btn').addEventListener('click', getUserLocation);
+    
+    // Hydrants button
+    document.getElementById('toggle-hydrants-btn').addEventListener('click', toggleHydrants);
     
     // Threat layer checkboxes
     document.querySelectorAll('.threat-checkbox').forEach(checkbox => {

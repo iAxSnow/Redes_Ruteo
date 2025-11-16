@@ -8,3 +8,4 @@ Flask>=3.0.0
 selenium>=4.15.2
 selenium-wire>=5.1.0
 blinker==1.7.0
+pandas>=2.0.0

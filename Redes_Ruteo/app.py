@@ -202,6 +202,83 @@ def api_threats():
         }), 500
 
 
+@app.route('/api/hydrants')
+def api_hydrants():
+    """
+    API endpoint to retrieve hydrants from the database.
+    Returns GeoJSON FeatureCollection with hydrants color-coded by status.
+    Status can be: vigente (functional), no vigente (not functional), etc.
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        features = []
+        
+        # Query hydrants
+        cur.execute("""
+            SELECT 
+                ext_id,
+                status,
+                provider,
+                props,
+                ST_AsGeoJSON(geom) as geometry
+            FROM rr.metadata_hydrants
+            WHERE geom IS NOT NULL
+        """)
+        
+        for row in cur.fetchall():
+            # Normalize status for color coding
+            status = (row['status'] or 'desconocido').lower()
+            
+            # Determine functional status
+            # vigente, operativo, bueno -> functional
+            # no vigente, malo, no_operativo, fuera de servicio -> not_functional
+            if status in ('vigente', 'operativo', 'bueno'):
+                functional_status = 'functional'
+            elif 'no' in status or status in ('malo', 'fuera de servicio', 'no_operativo'):
+                functional_status = 'not_functional'
+            else:
+                functional_status = 'unknown'
+            
+            feature = {
+                "type": "Feature",
+                "properties": {
+                    "ext_id": row['ext_id'],
+                    "status": row['status'],
+                    "functional_status": functional_status,
+                    "provider": row['provider'],
+                    "type": "hydrant"
+                },
+                "geometry": json.loads(row['geometry'])
+            }
+            
+            # Merge additional properties from props JSONB field
+            if row['props']:
+                feature['properties'].update(row['props'])
+            
+            features.append(feature)
+        
+        cur.close()
+        conn.close()
+        
+        geojson = {
+            "type": "FeatureCollection",
+            "features": features
+        }
+        
+        return jsonify(geojson)
+    
+    except Exception as e:
+        # Log the error for debugging but don't expose details to clients
+        app.logger.error(f"Error loading hydrants: {str(e)}")
+        return jsonify({
+            "type": "FeatureCollection",
+            "features": [],
+            "error": "Failed to load hydrant data"
+        }), 500
+
+
 def build_route_geojson(cur, route_segments_query, params):
     """
     Helper function to build GeoJSON from a route query.
@@ -218,7 +295,8 @@ def build_route_geojson(cur, route_segments_query, params):
             'geometry', ST_AsGeoJSON(ST_LineMerge(ST_Union(w.geom ORDER BY r.seq)))::json
         ) AS geojson
         FROM route r
-        JOIN rr.ways w ON r.edge = w.id;
+        JOIN rr.ways w ON r.edge = w.id
+        WHERE r.edge != -1;
     """
     cur.execute(sql_query, params)
     result = cur.fetchone()
@@ -316,8 +394,11 @@ def api_calculate_route():
                     w.id, 
                     w.source, 
                     w.target, 
-                    w.length_m as cost, 
-                    w.length_m as reverse_cost,
+                    w.length_m as cost,
+                    CASE 
+                        WHEN w.oneway = true THEN -1
+                        ELSE w.length_m
+                    END as reverse_cost,
                     COALESCE(t.max_prob, 0) as fail_prob
                 FROM rr.ways w
                 LEFT JOIN (
@@ -347,11 +428,20 @@ def api_calculate_route():
                         way_id,
                         MAX(
                             CASE
+                                -- Waze threats
                                 WHEN source = 'waze' AND subtype = 'CLOSURE' THEN 0.7
                                 WHEN source = 'waze' AND subtype = 'TRAFFIC_JAM' THEN 0.2
-                                WHEN source = 'weather' AND subtype = 'HEAVY_RAIN' THEN 0.15 + (severity - 1) * 0.1
-                                WHEN source = 'weather' AND subtype = 'STRONG_WIND' THEN 0.12 + (severity - 1) * 0.1
-                                WHEN source = 'weather' AND subtype = 'LOW_VISIBILITY' THEN 0.25 + (severity - 1) * 0.1
+                                
+                                -- Weather threats (fire truck specific)
+                                WHEN source = 'weather' AND subtype = 'HEAVY_RAIN' THEN 0.15 + (severity - 1) * 0.08
+                                WHEN source = 'weather' AND subtype = 'STRONG_WIND' THEN 0.12 + (severity - 1) * 0.08
+                                WHEN source = 'weather' AND subtype = 'LOW_VISIBILITY' THEN 0.30 + (severity - 1) * 0.10
+                                WHEN source = 'weather' AND subtype = 'SNOW' THEN 0.20 + (severity - 1) * 0.10
+                                WHEN source = 'weather' AND subtype = 'FREEZING_CONDITIONS' THEN 0.35 + (severity - 1) * 0.15
+                                WHEN source = 'weather' AND subtype = 'EXTREME_HEAT' THEN 0.08 + (severity - 1) * 0.04
+                                WHEN source = 'weather' AND subtype = 'THUNDERSTORM' THEN 0.45
+                                
+                                -- Traffic calming
                                 WHEN source = 'traffic_calming' THEN 0.02
                                 ELSE 0.05
                             END
@@ -359,6 +449,7 @@ def api_calculate_route():
                     FROM all_threats
                     GROUP BY way_id
                 ) t ON w.id = t.way_id
+                WHERE w.length_m > 0
             """
             app.logger.info("Using failure-simulated graph for routing (cost-weighted).")
         else:
@@ -367,10 +458,14 @@ def api_calculate_route():
                     w.id, 
                     w.source, 
                     w.target, 
-                    w.length_m as cost, 
-                    w.length_m as reverse_cost,
+                    w.length_m as cost,
+                    CASE 
+                        WHEN w.oneway = true THEN -1
+                        ELSE w.length_m
+                    END as reverse_cost,
                     COALESCE(w.fail_prob, 0) as fail_prob
                 FROM rr.ways w
+                WHERE w.length_m > 0
             """
 
         # --- Algorithm Implementations ---
@@ -393,6 +488,8 @@ def api_calculate_route():
                     }
             except Exception as e:
                 app.logger.error(f"Error calculating dijkstra_dist route: {str(e)}")
+                import traceback
+                app.logger.error(traceback.format_exc())
         
         # Route 2: Dijkstra with probability-weighted cost
         if algorithm == 'all' or algorithm == 'dijkstra_prob':
@@ -401,7 +498,10 @@ def api_calculate_route():
                 sql_for_pgr = f"""
                     SELECT id, source, target, 
                            cost * (1 + COALESCE(fail_prob, 0) * 10) AS cost,
-                           reverse_cost * (1 + COALESCE(fail_prob, 0) * 10) AS reverse_cost
+                           CASE 
+                               WHEN reverse_cost = -1 THEN -1
+                               ELSE reverse_cost * (1 + COALESCE(fail_prob, 0) * 10)
+                           END AS reverse_cost
                     FROM ({base_routing_query}) q
                 """
                 route_query = f"SELECT * FROM pgr_dijkstra('{sql_for_pgr.replace('%', '%%')}', {source_node}, {target_node}, directed := true)"
@@ -417,6 +517,8 @@ def api_calculate_route():
                     }
             except Exception as e:
                 app.logger.error(f"Error calculating dijkstra_prob route: {str(e)}")
+                import traceback
+                app.logger.error(traceback.format_exc())
         
         # Route 3: A* with probability-weighted cost
         if algorithm == 'all' or algorithm == 'astar_prob':
@@ -425,8 +527,12 @@ def api_calculate_route():
                 sql_for_pgr = f"""
                     SELECT q.id, q.source, q.target, 
                            q.cost * (1 + COALESCE(q.fail_prob, 0) * 10) AS cost,
-                           q.reverse_cost * (1 + COALESCE(q.fail_prob, 0) * 10) AS reverse_cost,
-                           ST_X(sv.the_geom) as x1, ST_Y(sv.the_geom) as y1, ST_X(tv.the_geom) as x2, ST_Y(tv.the_geom) as y2
+                           CASE 
+                               WHEN q.reverse_cost = -1 THEN -1
+                               ELSE q.reverse_cost * (1 + COALESCE(q.fail_prob, 0) * 10)
+                           END AS reverse_cost,
+                           ST_X(sv.the_geom) as x1, ST_Y(sv.the_geom) as y1, 
+                           ST_X(tv.the_geom) as x2, ST_Y(tv.the_geom) as y2
                     FROM ({base_routing_query}) q
                     JOIN rr.ways_vertices_pgr sv ON q.source = sv.id
                     JOIN rr.ways_vertices_pgr tv ON q.target = tv.id
@@ -444,15 +550,17 @@ def api_calculate_route():
                     }
             except Exception as e:
                 app.logger.error(f"Error calculating astar_prob route: {str(e)}")
+                import traceback
+                app.logger.error(traceback.format_exc())
         
-        # Route 4: Filtered Dijkstra (only safe edges with fail_prob < 0.75)
+        # Route 4: Filtered Dijkstra (only safe edges with fail_prob < 0.5)
         if algorithm == 'all' or algorithm == 'filtered_dijkstra':
             try:
                 start_time = time.time()
                 sql_for_pgr = f"""
                     SELECT id, source, target, cost, reverse_cost
                     FROM ({base_routing_query}) q
-                    WHERE COALESCE(fail_prob, 0) < 1.0
+                    WHERE COALESCE(fail_prob, 0) < 0.5
                 """
                 route_query = f"SELECT * FROM pgr_dijkstra('{sql_for_pgr.replace('%', '%%')}', {source_node}, {target_node}, directed := true)"
 
@@ -465,8 +573,12 @@ def api_calculate_route():
                         "compute_time_ms": round(compute_time_ms, 2),
                         "algorithm": "Dijkstra Filtrado (Solo Seguros)"
                     }
+                else:
+                    app.logger.warning(f"Filtered Dijkstra found no route (may be too restrictive)")
             except Exception as e:
                 app.logger.error(f"Error calculating filtered_dijkstra route: {str(e)}")
+                import traceback
+                app.logger.error(traceback.format_exc())
         
         cur.close()
         conn.close()
