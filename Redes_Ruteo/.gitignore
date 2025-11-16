@@ -1,0 +1,15 @@
+*.json
+*.geojson
+infraestructura/
+metadata/
+amenazas/
+cache/
+data/
+outputs/
+results/
+.venv/
+.env
+__pycache__/
+.vscode/
+.DS_Store
+Thumbs.db

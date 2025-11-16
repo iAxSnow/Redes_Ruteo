@@ -10,6 +10,7 @@ import sys
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
+import time
 
 load_dotenv()
 
@@ -20,9 +21,29 @@ DB_NAME = os.getenv("PGDATABASE", "rr")
 DB_USER = os.getenv("PGUSER", "postgres")
 DB_PASS = os.getenv("PGPASSWORD", "postgres")
 
-# Threat parameters
-INFLUENCE_RADIUS_M = 50  # meters
-FAILURE_PROBABILITY = 0.5  # probability assigned to affected elements
+# --- Parámetros de Amenazas (Ajustados por tipo) ---
+# Se eliminó el radio/probabilidad global.
+
+# Amenazas Waze (accidentes, cierres)
+WAZE_RADIUS_M = 100  # Radio de influencia grande (en metros)
+WAZE_PROB = 0.7      # Probabilidad/Impacto base alto
+
+# Amenazas Calming (reductores de velocidad)
+CALMING_RADIUS_M = 15  # Radio de influencia muy localizado (en metros)
+CALMING_PROB = 0.2     # Probabilidad/Impacto bajo (solo reduce velocidad)
+
+# Amenazas Climáticas (se aplica por severidad sobre polígono)
+WEATHER_PROB_FACTOR = 0.5  # Factor para multiplicar por t.severity / 3.0
+
+# Timeout por sentencia (ms) para evitar bloqueos prolongados en consultas pesadas
+STATEMENT_TIMEOUT_MS = int(os.getenv("PG_STATEMENT_TIMEOUT_MS", "120000"))
+
+
+def meters_to_degrees(meters: float) -> float:
+    """Convierte metros a grados (aprox. en el ecuador).
+    Suficiente para radios pequeños (<= 200 m) y permite usar índices GiST en geometry.
+    """
+    return meters / 111_320.0
 
 
 def get_db_connection():
@@ -74,8 +95,6 @@ def ensure_fail_prob_columns(conn):
             )
         """)
         
-        # --- CORRECCIÓN 1: Acceder por índice [0] ---
-        # Este cursor es estándar, no RealDictCursor.
         if cur.fetchone()[0]:
             # Check and add fail_prob column to rr.ways_vertices_pgr
             cur.execute("""
@@ -101,6 +120,132 @@ def ensure_fail_prob_columns(conn):
             print("  Run pgr_createTopology first to create this table")
 
 
+def ensure_spatial_indexes(conn):
+    """Asegura índices espaciales en columnas geometry para acelerar ST_DWithin/Intersects."""
+    with conn.cursor() as cur:
+        print("Ensuring spatial indexes (GiST) exist...")
+
+        # rr.ways.geom
+        cur.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_indexes
+                    WHERE schemaname='rr' AND tablename='ways' AND indexname='idx_ways_geom'
+                ) THEN
+                    EXECUTE 'CREATE INDEX idx_ways_geom ON rr.ways USING GIST (geom)';
+                END IF;
+            END$$;
+            """
+        )
+
+        # rr.ways_vertices_pgr.geom o the_geom (si existe la tabla)
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema='rr' AND table_name='ways_vertices_pgr'
+            )
+            """
+        )
+        if cur.fetchone()[0]:
+            cur.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema='rr' AND table_name='ways_vertices_pgr'
+                  AND column_name IN ('geom','the_geom')
+                LIMIT 1
+                """
+            )
+            row = cur.fetchone()
+            if row:
+                geom_col = row[0]
+                idx_name = f"idx_wvp_{geom_col}_gix"
+                cur.execute(
+                    f"""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_indexes
+                            WHERE schemaname='rr' AND tablename='ways_vertices_pgr' AND indexname='{idx_name}'
+                        ) THEN
+                            EXECUTE 'CREATE INDEX {idx_name} ON rr.ways_vertices_pgr USING GIST ({geom_col})';
+                        END IF;
+                    END$$;
+                    """
+                )
+
+        # rr.amenazas_waze.geom
+        cur.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_indexes
+                    WHERE schemaname='rr' AND tablename='amenazas_waze' AND indexname='am_waze_geom_gix'
+                ) THEN
+                    EXECUTE 'CREATE INDEX am_waze_geom_gix ON rr.amenazas_waze USING GIST (geom)';
+                END IF;
+            END$$;
+            """
+        )
+
+        # rr.amenazas_calming.geom
+        cur.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_indexes
+                    WHERE schemaname='rr' AND tablename='amenazas_calming' AND indexname='am_calming_geom_gix'
+                ) THEN
+                    EXECUTE 'CREATE INDEX am_calming_geom_gix ON rr.amenazas_calming USING GIST (geom)';
+                END IF;
+            END$$;
+            """
+        )
+
+        # rr.amenazas_clima.geom
+        cur.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_indexes
+                    WHERE schemaname='rr' AND tablename='amenazas_clima' AND indexname='am_clima_geom_gix'
+                ) THEN
+                    EXECUTE 'CREATE INDEX am_clima_geom_gix ON rr.amenazas_clima USING GIST (geom)';
+                END IF;
+            END$$;
+            """
+        )
+
+        # Actualiza estadísticas
+        cur.execute("ANALYZE rr.ways;")
+        cur.execute("ANALYZE rr.amenazas_waze;")
+        cur.execute("ANALYZE rr.amenazas_calming;")
+        cur.execute("ANALYZE rr.amenazas_clima;")
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema='rr' AND table_name='ways_vertices_pgr'
+            )
+            """
+        )
+        if cur.fetchone()[0]:
+            cur.execute("ANALYZE rr.ways_vertices_pgr;")
+        conn.commit()
+
+
+def set_statement_timeout(conn, ms: int):
+    """Configura statement_timeout en la conexión (ms)."""
+    with conn.cursor() as cur:
+        cur.execute("SET statement_timeout = %s", (ms,))
+    conn.commit()
+
+
 def reset_failure_probabilities(conn):
     """Reset all failure probabilities to 0.0."""
     # Este cursor SÍ es RealDictCursor, configurado en main()
@@ -121,7 +266,6 @@ def reset_failure_probabilities(conn):
             )
         """)
         
-        # --- CORRECCIÓN 2: Acceder por nombre de columna ['exists'] ---
         if cur.fetchone()['exists']:
             cur.execute("UPDATE rr.ways_vertices_pgr SET fail_prob = 0.0")
             vertices_count = cur.rowcount
@@ -148,7 +292,6 @@ def calculate_failure_probabilities(conn):
         # Check Waze threats
         try:
             cur.execute("SELECT COUNT(*) as count FROM rr.amenazas_waze")
-            # --- CORRECCIÓN 3: Acceder por nombre de columna ['count'] ---
             waze_count = cur.fetchone()['count']
         except Exception:
             print("⚠ Table rr.amenazas_waze does not exist or is not accessible")
@@ -156,7 +299,6 @@ def calculate_failure_probabilities(conn):
         # Check Weather threats
         try:
             cur.execute("SELECT COUNT(*) as count FROM rr.amenazas_clima")
-            # --- CORRECCIÓN 4: Acceder por nombre de columna ['count'] ---
             weather_count = cur.fetchone()['count']
         except Exception:
             print("⚠ Table rr.amenazas_clima does not exist or is not accessible")
@@ -164,7 +306,6 @@ def calculate_failure_probabilities(conn):
         # Check Traffic Calming threats
         try:
             cur.execute("SELECT COUNT(*) as count FROM rr.amenazas_calming")
-            # --- CORRECCIÓN 5: Acceder por nombre de columna ['count'] ---
             calming_count = cur.fetchone()['count']
         except Exception:
             print("⚠ Table rr.amenazas_calming does not exist or is not accessible")
@@ -183,78 +324,67 @@ def calculate_failure_probabilities(conn):
         print(f"  - Traffic Calming: {calming_count}")
         
         # Update ways within influence radius of threats (from all sources)
-        print(f"\nCalculating probabilities for ways (radius: {INFLUENCE_RADIUS_M}m)...")
+        print(f"\nCalculating probabilities for ways...")
+        start_all = time.time()
         
-        # Process Waze threats (optimized with JOIN)
-        if waze_count > 0:
-            cur.execute("""
-                UPDATE rr.ways w
-                SET fail_prob = GREATEST(
-                    COALESCE(w.fail_prob, 0.0),
-                    %(prob)s
-                )
-                FROM (
-                    SELECT DISTINCT w2.id
-                    FROM rr.ways w2
-                    JOIN rr.amenazas_waze t
-                    ON ST_DWithin(
-                        w2.geom::geography,
-                        t.geom::geography,
-                        %(radius)s
-                    )
-                ) AS affected_ways
-                WHERE w.id = affected_ways.id
-            """, {
-                'prob': FAILURE_PROBABILITY,
-                'radius': INFLUENCE_RADIUS_M
-            })
-            waze_affected = cur.rowcount
-            print(f"✓ Updated {waze_affected} ways based on Waze threats")
-        
-        # Process Weather threats
-        if weather_count > 0:
-            cur.execute("""
-                UPDATE rr.ways w
-                SET fail_prob = GREATEST(
-                    COALESCE(w.fail_prob, 0.0),
-                    %(prob)s * (t.severity / 3.0)
-                )
-                FROM rr.amenazas_clima t -- CORRECCIÓN: Añadido FROM
-                WHERE ST_Intersects(w.geom, t.geom)
-            """, {
-                'prob': FAILURE_PROBABILITY
-            })
-            weather_affected = cur.rowcount
-            print(f"✓ Updated {weather_affected} ways based on Weather threats")
-        
-        # Process Traffic Calming threats
-        if calming_count > 0:
-            # Use spatial index and batch processing for better performance with many threats
-            print(f"  Processing {calming_count} traffic calming threats (this may take a moment)...")
-            cur.execute("""
-                UPDATE rr.ways w
-                SET fail_prob = GREATEST(
-                    COALESCE(w.fail_prob, 0.0),
-                    %(prob)s * 0.3
-                )
-                FROM (
-                    SELECT DISTINCT w2.id
-                    FROM rr.ways w2
-                    JOIN rr.amenazas_calming t
-                    ON ST_DWithin(
-                        w2.geom::geography,
-                        t.geom::geography,
-                        %(radius)s
-                    )
-                ) AS affected_ways
-                WHERE w.id = affected_ways.id
-            """, {
-                'prob': FAILURE_PROBABILITY,
-                'radius': INFLUENCE_RADIUS_M
-            })
-            calming_affected = cur.rowcount
-            print(f"✓ Updated {calming_affected} ways based on Traffic Calming threats")
-        
+        # --- Optimización: Calcular todas las probabilidades en una sola consulta ---
+        cur.execute(
+            """
+            WITH all_threats AS (
+                -- Waze threats
+                SELECT 
+                    w.id AS way_id,
+                    %(waze_prob)s AS prob
+                FROM rr.ways w
+                JOIN rr.amenazas_waze t ON ST_DWithin(w.geom, t.geom, %(waze_radius_deg)s)
+                WHERE %(waze_count)s > 0
+
+                UNION ALL
+
+                -- Weather threats
+                SELECT 
+                    w.id AS way_id,
+                    (%(weather_prob)s * (t.severity / 3.0)) AS prob
+                FROM rr.ways w
+                JOIN rr.amenazas_clima t ON ST_Intersects(w.geom, t.geom)
+                WHERE %(weather_count)s > 0
+
+                UNION ALL
+
+                -- Traffic Calming threats
+                SELECT 
+                    w.id AS way_id,
+                    %(calming_prob)s AS prob
+                FROM rr.ways w
+                JOIN rr.amenazas_calming t ON ST_DWithin(w.geom, t.geom, %(calming_radius_deg)s)
+                WHERE %(calming_count)s > 0
+            ),
+            max_probs AS (
+                SELECT 
+                    way_id,
+                    MAX(prob) as max_prob
+                FROM all_threats
+                GROUP BY way_id
+            )
+            UPDATE rr.ways w
+            SET fail_prob = mp.max_prob
+            FROM max_probs mp
+            WHERE w.id = mp.way_id;
+            """,
+            {
+                'waze_prob': WAZE_PROB,
+                'waze_radius_deg': meters_to_degrees(WAZE_RADIUS_M),
+                'waze_count': waze_count,
+                'weather_prob': WEATHER_PROB_FACTOR,
+                'weather_count': weather_count,
+                'calming_prob': CALMING_PROB,
+                'calming_radius_deg': meters_to_degrees(CALMING_RADIUS_M),
+                'calming_count': calming_count,
+            }
+        )
+        ways_affected = cur.rowcount
+        print(f"✓ Updated {ways_affected} ways based on all threats in {time.time()-start_all:.1f}s")
+
         # Update vertices within influence radius of threats (if table exists)
         cur.execute("""
             SELECT EXISTS (
@@ -265,93 +395,85 @@ def calculate_failure_probabilities(conn):
             )
         """)
         
-        # --- CORRECCIÓN 6: Acceder por nombre de columna ['exists'] ---
         if cur.fetchone()['exists']:
-            # Check if geom column exists in ways_vertices_pgr
+            # Detect geometry column in ways_vertices_pgr (geom or the_geom)
             cur.execute("""
                 SELECT column_name 
                 FROM information_schema.columns 
                 WHERE table_schema = 'rr' 
                 AND table_name = 'ways_vertices_pgr' 
-                AND column_name = 'geom'
+                AND column_name IN ('geom','the_geom')
+                LIMIT 1
             """)
-            
-            if cur.fetchone():
-                print(f"\nCalculating probabilities for vertices (radius: {INFLUENCE_RADIUS_M}m)...")
-                
-                # Process Waze threats for vertices (optimized with JOIN)
-                if waze_count > 0:
-                    cur.execute("""
-                        UPDATE rr.ways_vertices_pgr v
-                        SET fail_prob = GREATEST(
-                            COALESCE(v.fail_prob, 0.0),
-                            %(prob)s
-                        )
-                        FROM (
-                            SELECT DISTINCT v2.id
-                            FROM rr.ways_vertices_pgr v2
-                            JOIN rr.amenazas_waze t
-                            ON ST_DWithin(
-                                v2.geom::geography,
-                                t.geom::geography,
-                                %(radius)s
-                            )
-                        ) AS affected_vertices
-                        WHERE v.id = affected_vertices.id
-                    """, {
-                        'prob': FAILURE_PROBABILITY,
-                        'radius': INFLUENCE_RADIUS_M
-                    })
-                    vertices_waze = cur.rowcount
-                    print(f"✓ Updated {vertices_waze} vertices based on Waze threats")
-                
-                # Process Weather threats for vertices
-                if weather_count > 0:
-                    cur.execute("""
-                        UPDATE rr.ways_vertices_pgr v
-                        SET fail_prob = GREATEST(
-                            COALESCE(v.fail_prob, 0.0),
-                            %(prob)s * (t.severity / 3.0)
-                        )
-                        FROM rr.amenazas_clima t -- CORRECCIÓN: Añadido FROM
-                        WHERE ST_Intersects(v.geom, t.geom)
-                    """, {
-                        'prob': FAILURE_PROBABILITY
-                    })
-                    vertices_weather = cur.rowcount
-                    print(f"✓ Updated {vertices_weather} vertices based on Weather threats")
-                
-                # Process Traffic Calming threats for vertices (optimized with JOIN)
-                if calming_count > 0:
-                    cur.execute("""
-                        UPDATE rr.ways_vertices_pgr v
-                        SET fail_prob = GREATEST(
-                            COALESCE(v.fail_prob, 0.0),
-                            %(prob)s * 0.3
-                        )
-                        FROM (
-                            SELECT DISTINCT v2.id
-                            FROM rr.ways_vertices_pgr v2
-                            JOIN rr.amenazas_calming t
-                            ON ST_DWithin(
-                                v2.geom::geography,
-                                t.geom::geography,
-                                %(radius)s
-                            )
-                        ) AS affected_vertices
-                        WHERE v.id = affected_vertices.id
-                    """, {
-                        'prob': FAILURE_PROBABILITY,
-                        'radius': INFLUENCE_RADIUS_M
-                    })
-                    vertices_calming = cur.rowcount
-                    print(f"✓ Updated {vertices_calming} vertices based on Traffic Calming threats")
+            col_row = cur.fetchone()
+            if col_row:
+                geom_col = col_row['column_name'] if isinstance(col_row, dict) else col_row[0]
+                print(f"\nCalculating probabilities for vertices (using column '{geom_col}')...")
+                step_start = time.time()
+
+                # --- Optimización: Calcular todas las probabilidades en una sola consulta ---
+                cur.execute(
+                    f"""
+                    WITH all_threats AS (
+                        -- Waze threats
+                        SELECT 
+                            v.id AS vertex_id,
+                            %(waze_prob)s AS prob
+                        FROM rr.ways_vertices_pgr v
+                        JOIN rr.amenazas_waze t ON ST_DWithin(v.{geom_col}, t.geom, %(waze_radius_deg)s)
+                        WHERE %(waze_count)s > 0
+
+                        UNION ALL
+
+                        -- Weather threats
+                        SELECT 
+                            v.id AS vertex_id,
+                            (%(weather_prob)s * (t.severity / 3.0)) AS prob
+                        FROM rr.ways_vertices_pgr v
+                        JOIN rr.amenazas_clima t ON ST_Intersects(v.{geom_col}, t.geom)
+                        WHERE %(weather_count)s > 0
+
+                        UNION ALL
+
+                        -- Traffic Calming threats
+                        SELECT 
+                            v.id AS vertex_id,
+                            %(calming_prob)s AS prob
+                        FROM rr.ways_vertices_pgr v
+                        JOIN rr.amenazas_calming t ON ST_DWithin(v.{geom_col}, t.geom, %(calming_radius_deg)s)
+                        WHERE %(calming_count)s > 0
+                    ),
+                    max_probs AS (
+                        SELECT 
+                            vertex_id,
+                            MAX(prob) as max_prob
+                        FROM all_threats
+                        GROUP BY vertex_id
+                    )
+                    UPDATE rr.ways_vertices_pgr v
+                    SET fail_prob = mp.max_prob
+                    FROM max_probs mp
+                    WHERE v.id = mp.vertex_id;
+                    """,
+                    {
+                        'waze_prob': WAZE_PROB,
+                        'waze_radius_deg': meters_to_degrees(WAZE_RADIUS_M),
+                        'waze_count': waze_count,
+                        'weather_prob': WEATHER_PROB_FACTOR,
+                        'weather_count': weather_count,
+                        'calming_prob': CALMING_PROB,
+                        'calming_radius_deg': meters_to_degrees(CALMING_RADIUS_M),
+                        'calming_count': calming_count,
+                    }
+                )
+                vertices_affected = cur.rowcount
+                print(f"✓ Updated {vertices_affected} vertices based on all threats in {time.time()-step_start:.1f}s")
             else:
-                print("⚠ ways_vertices_pgr table exists but geom column not found")
+                print("⚠ ways_vertices_pgr table exists but no geom/the_geom column found")
         
         conn.commit()
-
-
+        print(f"Total calculation time: {time.time()-start_all:.1f}s")
+    
 def print_statistics(conn):
     """Print summary statistics of failure probabilities."""
     # Este cursor SÍ es RealDictCursor, configurado en main()
@@ -371,7 +493,6 @@ def print_statistics(conn):
         """)
         row = cur.fetchone()
         print(f"\nWays:")
-        # --- CORRECCIÓN 7: Acceder por nombre de columna ---
         print(f"  Total: {row['total']}")
         print(f"  Affected (fail_prob > 0): {row['affected']}")
         print(f"  Average probability: {row['avg_prob']}")
@@ -387,7 +508,6 @@ def print_statistics(conn):
             )
         """)
         
-        # --- CORRECCIÓN 8: Acceder por nombre de columna ['exists'] ---
         if cur.fetchone()['exists']:
             cur.execute("""
                 SELECT 
@@ -399,7 +519,6 @@ def print_statistics(conn):
             """)
             row = cur.fetchone()
             print(f"\nVertices:")
-            # --- CORRECCIÓN 9: Acceder por nombre de columna ---
             print(f"  Total: {row['total']}")
             print(f"  Affected (fail_prob > 0): {row['affected']}")
             print(f"  Average probability: {row['avg_prob']}")
@@ -420,9 +539,12 @@ def main():
         conn = get_db_connection()
         print("✓ Connected to database")
         
-        # --- CORRECCIÓN 10: Mover RealDictCursor DESPUÉS de ensure_fail_prob_columns ---
         # ensure_fail_prob_columns usa cursores estándar (tuplas)
         ensure_fail_prob_columns(conn)
+
+        # Índices espaciales y timeout por sentencia
+        ensure_spatial_indexes(conn)
+        set_statement_timeout(conn, STATEMENT_TIMEOUT_MS)
 
         # Ahora, establecer RealDictCursor para el resto del script
         conn.cursor_factory = RealDictCursor

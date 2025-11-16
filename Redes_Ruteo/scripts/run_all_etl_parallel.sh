@@ -47,15 +47,12 @@ runpy loaders/load_threats_weather.py
 log "Export → site/data"
 bash scripts/export_all_to_site.sh || true
 
-log "Levantar sitio en :8000"
-if command -v fuser >/dev/null 2>&1; then fuser -k 8000/tcp >/dev/null 2>&1 || true; fi
-(
-  cd site
-  nohup python -m http.server 8000 >/dev/null 2>&1 &
-  echo $! > ../.http_server_pid
-)
+log "Levantar sitio en :5000"
+if command -v fuser >/dev/null 2>&1; then fuser -k 5000/tcp >/dev/null 2>&1 || true; fi
+nohup python app.py >/dev/null 2>&1 &
+echo $! > .flask_server_pid
 sleep 2
-URL="http://localhost:8000"
+URL="http://localhost:5000"
 log "Sitio en: $URL"
 if command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL" >/dev/null 2>&1 || true; fi
 

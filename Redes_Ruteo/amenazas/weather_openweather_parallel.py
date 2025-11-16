@@ -33,8 +33,23 @@ BBOX_N=float(os.getenv("BBOX_N","-33.2"))
 BBOX_E=float(os.getenv("BBOX_E","-70.45"))
 GRID=float(os.getenv("WEATHER_GRID","0.02"))
 PAR=int(os.getenv("WEATHER_PARALLEL","4"))
-RAIN=float(os.getenv("RAIN_MM_H","3.0"))
-WIND=float(os.getenv("WIND_MS","12.0"))
+RAIN_MM_H=float(os.getenv("RAIN_MM_H","5.0")) # Heavy rain threshold
+WIND_MS=float(os.getenv("WIND_MS","13.9")) # Strong wind (>= 50 km/h)
+VISIBILITY_M=int(os.getenv("VISIBILITY_M","1000")) # Low visibility threshold
+SNOW_MM_H=float(os.getenv("SNOW_MM_H","1.0")) # Snow threshold
+
+# OpenWeather condition codes for fog, mist, haze, etc.
+# See: https://openweathermap.org/weather-conditions
+FOG_HAZE_CODES = {
+    701, # Mist
+    711, # Smoke
+    721, # Haze
+    731, # Sand/dust whirls
+    741, # Fog
+    751, # Sand
+    761, # Dust
+    762, # Volcanic ash
+}
 
 def grid_cells(s,w,n,e,step):
     lat=s
@@ -54,13 +69,53 @@ def fetch(lat,lon):
     r.raise_for_status()
     return r.json()
 
-def severity(m):
-    sev=0
-    rain = (m.get("rain") or {}).get("1h") or (m.get("rain") or {}).get("3h") or 0.0
-    wind = (m.get("wind") or {}).get("speed") or 0.0
-    if rain and rain>=RAIN: sev+=1
-    if wind and wind>=WIND: sev+=1
-    return sev, rain or 0.0, wind or 0.0
+def get_threats(m):
+    """
+    Analyzes weather data and returns a list of threat dictionaries.
+    Each threat corresponds to a specific hazardous condition.
+    """
+    threats = []
+    
+    # 1. Heavy Rain
+    rain_mm = (m.get("rain", {}).get("1h") or 0.0)
+    if rain_mm >= RAIN_MM_H:
+        threats.append({
+            "subtype": "HEAVY_RAIN",
+            "severity": 2 if rain_mm > 10.0 else 1, # Higher severity for very heavy rain
+            "metrics": {"rain_mm_h": rain_mm}
+        })
+
+    # 2. Strong Wind
+    wind_ms = (m.get("wind", {}).get("speed") or 0.0)
+    if wind_ms >= WIND_MS:
+        threats.append({
+            "subtype": "STRONG_WIND",
+            "severity": 2 if wind_ms > 17.5 else 1, # Higher severity for gale-force winds
+            "metrics": {"wind_ms": wind_ms}
+        })
+
+    # 3. Low Visibility (Fog, Mist, etc.)
+    visibility_m = m.get("visibility")
+    weather_codes = {w.get("id") for w in m.get("weather", [])}
+    is_foggy = bool(FOG_HAZE_CODES.intersection(weather_codes))
+
+    if (visibility_m is not None and visibility_m <= VISIBILITY_M) or is_foggy:
+        threats.append({
+            "subtype": "LOW_VISIBILITY",
+            "severity": 2 if visibility_m is not None and visibility_m < 200 else 1,
+            "metrics": {"visibility_m": visibility_m or "N/A"}
+        })
+
+    # 4. Snow
+    snow_mm = (m.get("snow", {}).get("1h") or 0.0)
+    if snow_mm >= SNOW_MM_H:
+        threats.append({
+            "subtype": "SNOW",
+            "severity": 2 if snow_mm > 5.0 else 1,
+            "metrics": {"snow_mm_h": snow_mm}
+        })
+        
+    return threats
 
 def main():
     cells=list(grid_cells(BBOX_S,BBOX_W,BBOX_N,BBOX_E,GRID))
@@ -74,15 +129,24 @@ def main():
         for i, (cell,fut) in enumerate(zip(cells, as_completed(futs))):
             try:
                 res=fut.result()
-                sev,rain,wind=severity(res)
-                props={"provider":"OpenWeather","ext_id":f"ow:{cell[4]:.3f},{cell[5]:.3f}",
-                       "kind":"weather","subtype":"RAIN_WIND","severity":int(sev),
-                       "metrics":{"rain_mm_h":rain,"wind_ms":wind},
-                       "ts":res.get("dt")}
+                threats = get_threats(res)
+                
                 poly={"type":"Polygon","coordinates":[
                     [[cell[1],cell[0]],[cell[3],cell[0]],[cell[3],cell[2]],[cell[1],cell[2]],[cell[1],cell[0]]]
                 ]}
-                feats.append({"type":"Feature","geometry":poly,"properties":props})
+
+                for threat in threats:
+                    props={
+                        "provider": "OpenWeather",
+                        "ext_id": f"ow:{cell[4]:.3f},{cell[5]:.3f}:{threat['subtype']}",
+                        "kind": "weather",
+                        "subtype": threat["subtype"],
+                        "severity": threat["severity"],
+                        "metrics": threat["metrics"],
+                        "ts": res.get("dt")
+                    }
+                    feats.append({"type":"Feature","geometry":poly,"properties":props})
+
                 if (i + 1) % 10 == 0:
                     print(f"[INFO] Processed {i + 1}/{len(cells)} cells...")
             except Exception as ex:

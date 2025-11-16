@@ -28,13 +28,52 @@ PGPASSWORD = os.getenv("PGPASSWORD", "postgres")
 
 def get_db_connection():
     """Create and return a database connection."""
-    return psycopg2.connect(
+    conn = psycopg2.connect(
         host=PGHOST,
         port=PGPORT,
         dbname=PGDATABASE,
         user=PGUSER,
         password=PGPASSWORD
     )
+    # Ensure fail_prob column exists
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'rr' AND table_name = 'ways' AND column_name = 'fail_prob'
+        """)
+        if cur.fetchone() is None:
+            app.logger.info("Column 'fail_prob' not found in 'rr.ways'. Adding it now.")
+            cur.execute("ALTER TABLE rr.ways ADD COLUMN fail_prob NUMERIC DEFAULT 0")
+            conn.commit()
+            app.logger.info("Column 'fail_prob' added successfully.")
+            
+        # Ensure vertices geometries are populated
+        cur.execute("""
+            SELECT COUNT(*) FROM rr.ways_vertices_pgr WHERE the_geom IS NULL
+        """)
+        null_geom_count = cur.fetchone()[0]
+        if null_geom_count > 0:
+            app.logger.info(f"Found {null_geom_count} vertices with NULL geometry. Populating now.")
+            cur.execute("""
+                UPDATE rr.ways_vertices_pgr 
+                SET the_geom = sub.start_geom
+                FROM (
+                    SELECT DISTINCT ON (v.id) v.id, ST_StartPoint(w.geom) as start_geom
+                    FROM rr.ways_vertices_pgr v
+                    JOIN rr.ways w ON v.id = w.source
+                    WHERE v.the_geom IS NULL
+                    UNION
+                    SELECT DISTINCT ON (v.id) v.id, ST_EndPoint(w.geom) as start_geom
+                    FROM rr.ways_vertices_pgr v
+                    JOIN rr.ways w ON v.id = w.target
+                    WHERE v.the_geom IS NULL
+                ) sub
+                WHERE rr.ways_vertices_pgr.id = sub.id
+            """)
+            conn.commit()
+            app.logger.info("Vertices geometries populated successfully.")
+            
+    return conn
 
 
 @app.route('/')
@@ -163,35 +202,29 @@ def api_threats():
         }), 500
 
 
-def build_route_geojson(cur, route_segments):
-    """Helper function to build GeoJSON from route segments."""
-    coordinates = []
-    total_length_m = 0
-    
-    for segment in route_segments:
-        if segment['geom']:
-            # Parse the geometry
-            geom_wkt = segment['geom']
-            cur.execute("SELECT ST_AsGeoJSON(%s)", (geom_wkt,))
-            geom_json = json.loads(cur.fetchone()[0])
-            
-            if geom_json['type'] == 'LineString':
-                coordinates.extend(geom_json['coordinates'])
-            
-            if segment['length_m']:
-                total_length_m += float(segment['length_m'])
-    
-    return {
-        "type": "Feature",
-        "properties": {
-            "total_length_m": round(total_length_m, 2),
-            "segments": len(route_segments)
-        },
-        "geometry": {
-            "type": "LineString",
-            "coordinates": coordinates
-        }
-    }
+def build_route_geojson(cur, route_segments_query, params):
+    """
+    Helper function to build GeoJSON from a route query.
+    This version is more efficient as it builds the geometry in a single SQL query.
+    """
+    sql_query = f"""
+        WITH route AS ({route_segments_query})
+        SELECT json_build_object(
+            'type', 'Feature',
+            'properties', json_build_object(
+                'total_length_m', SUM(w.length_m),
+                'total_cost', SUM(r.cost)
+            ),
+            'geometry', ST_AsGeoJSON(ST_LineMerge(ST_Union(w.geom ORDER BY r.seq)))::json
+        ) AS geojson
+        FROM route r
+        JOIN rr.ways w ON r.edge = w.id;
+    """
+    cur.execute(sql_query, params)
+    result = cur.fetchone()
+    if result and result['geojson']:
+        return result['geojson']
+    return None
 
 
 @app.route('/api/calculate_route', methods=['POST'])
@@ -211,7 +244,8 @@ def api_calculate_route():
         
         start = data['start']
         end = data['end']
-        algorithm = data.get('algorithm', 'dijkstra_dist')  # Default to distance-based Dijkstra
+        algorithm = data.get('algorithm', 'dijkstra_dist')
+        simulate_failures = data.get('simulate_failures', False)
         
         if 'lat' not in start or 'lng' not in start or 'lat' not in end or 'lng' not in end:
             return jsonify({
@@ -234,9 +268,9 @@ def api_calculate_route():
         
         # Find nearest node to start point
         cur.execute("""
-            SELECT id, ST_X(geom) as x, ST_Y(geom) as y
+            SELECT id, ST_X(the_geom) as x, ST_Y(the_geom) as y
             FROM rr.ways_vertices_pgr
-            ORDER BY geom <-> ST_SetSRID(ST_MakePoint(%s, %s), 4326)
+            ORDER BY the_geom <-> ST_SetSRID(ST_MakePoint(%s, %s), 4326)
             LIMIT 1
         """, (start_lng, start_lat))
         
@@ -253,9 +287,9 @@ def api_calculate_route():
         
         # Find nearest node to end point
         cur.execute("""
-            SELECT id, ST_X(geom) as x, ST_Y(geom) as y
+            SELECT id, ST_X(the_geom) as x, ST_Y(the_geom) as y
             FROM rr.ways_vertices_pgr
-            ORDER BY geom <-> ST_SetSRID(ST_MakePoint(%s, %s), 4326)
+            ORDER BY the_geom <-> ST_SetSRID(ST_MakePoint(%s, %s), 4326)
             LIMIT 1
         """, (end_lng, end_lat))
         
@@ -274,27 +308,86 @@ def api_calculate_route():
         
         results = {}
         
+        # --- Base query for routing ---
+        # This query will be modified by each algorithm
+        if simulate_failures:
+            base_routing_query = """
+                SELECT 
+                    w.id, 
+                    w.source, 
+                    w.target, 
+                    w.length_m as cost, 
+                    w.length_m as reverse_cost,
+                    COALESCE(t.max_prob, 0) as fail_prob
+                FROM rr.ways w
+                LEFT JOIN (
+                    WITH all_threats AS (
+                        -- Waze threats
+                        SELECT 
+                            w.id AS way_id,
+                            'waze' as source, subtype, severity
+                        FROM rr.ways w
+                        JOIN rr.amenazas_waze t ON ST_DWithin(w.geom, t.geom, 0.001)  -- ~100m
+                        UNION ALL
+                        -- Weather threats
+                        SELECT 
+                            w.id AS way_id,
+                            'weather' as source, subtype, severity
+                        FROM rr.ways w
+                        JOIN rr.amenazas_clima t ON ST_Intersects(w.geom, t.geom)
+                        UNION ALL
+                        -- Traffic Calming threats
+                        SELECT 
+                            w.id AS way_id,
+                            'traffic_calming' as source, subtype, severity
+                        FROM rr.ways w
+                        JOIN rr.amenazas_calming t ON ST_DWithin(w.geom, t.geom, 0.00015)  -- ~15m
+                    )
+                    SELECT
+                        way_id,
+                        MAX(
+                            CASE
+                                WHEN source = 'waze' AND subtype = 'CLOSURE' THEN 0.7
+                                WHEN source = 'waze' AND subtype = 'TRAFFIC_JAM' THEN 0.2
+                                WHEN source = 'weather' AND subtype = 'HEAVY_RAIN' THEN 0.15 + (severity - 1) * 0.1
+                                WHEN source = 'weather' AND subtype = 'STRONG_WIND' THEN 0.12 + (severity - 1) * 0.1
+                                WHEN source = 'weather' AND subtype = 'LOW_VISIBILITY' THEN 0.25 + (severity - 1) * 0.1
+                                WHEN source = 'traffic_calming' THEN 0.02
+                                ELSE 0.05
+                            END
+                        ) AS max_prob
+                    FROM all_threats
+                    GROUP BY way_id
+                ) t ON w.id = t.way_id
+            """
+            app.logger.info("Using failure-simulated graph for routing (cost-weighted).")
+        else:
+            base_routing_query = """
+                SELECT 
+                    w.id, 
+                    w.source, 
+                    w.target, 
+                    w.length_m as cost, 
+                    w.length_m as reverse_cost,
+                    COALESCE(w.fail_prob, 0) as fail_prob
+                FROM rr.ways w
+            """
+
+        # --- Algorithm Implementations ---
+
         # Route 1: Dijkstra with distance only
         if algorithm == 'all' or algorithm == 'dijkstra_dist':
             try:
                 start_time = time.time()
-                cur.execute("""
-                    SELECT 
-                        r.seq, r.node, r.edge, r.cost, r.agg_cost,
-                        w.geom, w.highway, w.length_m
-                    FROM pgr_dijkstra(
-                        'SELECT id, source, target, length_m as cost FROM rr.ways',
-                        %s, %s, directed := false
-                    ) r
-                    LEFT JOIN rr.ways w ON r.edge = w.id
-                    ORDER BY r.seq
-                """, (source_node, target_node))
-                route_segments = cur.fetchall()
+                sql_for_pgr = f"SELECT id, source, target, cost, reverse_cost FROM ({base_routing_query}) q"
+                route_query = f"SELECT * FROM pgr_dijkstra('{sql_for_pgr.replace('%', '%%')}', {source_node}, {target_node}, directed := true)"
+                
+                geojson = build_route_geojson(cur, route_query, ())
                 compute_time_ms = (time.time() - start_time) * 1000
                 
-                if route_segments and len(route_segments) > 0:
+                if geojson:
                     results['dijkstra_dist'] = {
-                        "route_geojson": build_route_geojson(cur, route_segments),
+                        "route_geojson": geojson,
                         "compute_time_ms": round(compute_time_ms, 2),
                         "algorithm": "Dijkstra (Distancia)"
                     }
@@ -305,25 +398,20 @@ def api_calculate_route():
         if algorithm == 'all' or algorithm == 'dijkstra_prob':
             try:
                 start_time = time.time()
-                cur.execute("""
-                    SELECT 
-                        r.seq, r.node, r.edge, r.cost, r.agg_cost,
-                        w.geom, w.highway, w.length_m
-                    FROM pgr_dijkstra(
-                        'SELECT id, source, target, 
-                         length_m * (1 + (COALESCE(fail_prob, 0) * 100)) as cost 
-                         FROM rr.ways',
-                        %s, %s, directed := false
-                    ) r
-                    LEFT JOIN rr.ways w ON r.edge = w.id
-                    ORDER BY r.seq
-                """, (source_node, target_node))
-                route_segments = cur.fetchall()
+                sql_for_pgr = f"""
+                    SELECT id, source, target, 
+                           cost * (1 + COALESCE(fail_prob, 0) * 10) AS cost,
+                           reverse_cost * (1 + COALESCE(fail_prob, 0) * 10) AS reverse_cost
+                    FROM ({base_routing_query}) q
+                """
+                route_query = f"SELECT * FROM pgr_dijkstra('{sql_for_pgr.replace('%', '%%')}', {source_node}, {target_node}, directed := true)"
+
+                geojson = build_route_geojson(cur, route_query, ())
                 compute_time_ms = (time.time() - start_time) * 1000
                 
-                if route_segments and len(route_segments) > 0:
+                if geojson:
                     results['dijkstra_prob'] = {
-                        "route_geojson": build_route_geojson(cur, route_segments),
+                        "route_geojson": geojson,
                         "compute_time_ms": round(compute_time_ms, 2),
                         "algorithm": "Dijkstra (Probabilidad)"
                     }
@@ -334,58 +422,46 @@ def api_calculate_route():
         if algorithm == 'all' or algorithm == 'astar_prob':
             try:
                 start_time = time.time()
-                cur.execute("""
-                    SELECT 
-                        r.seq, r.node, r.edge, r.cost, r.agg_cost,
-                        w.geom, w.highway, w.length_m
-                    FROM pgr_astar(
-                        'SELECT id, source, target, 
-                         length_m * (1 + (COALESCE(fail_prob, 0) * 100)) as cost,
-                         ST_X(ST_StartPoint(geom)) as x1,
-                         ST_Y(ST_StartPoint(geom)) as y1,
-                         ST_X(ST_EndPoint(geom)) as x2,
-                         ST_Y(ST_EndPoint(geom)) as y2
-                         FROM rr.ways',
-                        %s, %s, directed := false
-                    ) r
-                    LEFT JOIN rr.ways w ON r.edge = w.id
-                    ORDER BY r.seq
-                """, (source_node, target_node))
-                route_segments = cur.fetchall()
+                sql_for_pgr = f"""
+                    SELECT q.id, q.source, q.target, 
+                           q.cost * (1 + COALESCE(q.fail_prob, 0) * 10) AS cost,
+                           q.reverse_cost * (1 + COALESCE(q.fail_prob, 0) * 10) AS reverse_cost,
+                           ST_X(sv.the_geom) as x1, ST_Y(sv.the_geom) as y1, ST_X(tv.the_geom) as x2, ST_Y(tv.the_geom) as y2
+                    FROM ({base_routing_query}) q
+                    JOIN rr.ways_vertices_pgr sv ON q.source = sv.id
+                    JOIN rr.ways_vertices_pgr tv ON q.target = tv.id
+                """
+                route_query = f"SELECT * FROM pgr_astar('{sql_for_pgr.replace('%', '%%')}', {source_node}, {target_node}, directed := true)"
+
+                geojson = build_route_geojson(cur, route_query, ())
                 compute_time_ms = (time.time() - start_time) * 1000
                 
-                if route_segments and len(route_segments) > 0:
+                if geojson:
                     results['astar_prob'] = {
-                        "route_geojson": build_route_geojson(cur, route_segments),
+                        "route_geojson": geojson,
                         "compute_time_ms": round(compute_time_ms, 2),
                         "algorithm": "A* (Probabilidad)"
                     }
             except Exception as e:
                 app.logger.error(f"Error calculating astar_prob route: {str(e)}")
         
-        # Route 4: Filtered Dijkstra (only safe edges with fail_prob < 0.5)
+        # Route 4: Filtered Dijkstra (only safe edges with fail_prob < 0.75)
         if algorithm == 'all' or algorithm == 'filtered_dijkstra':
             try:
                 start_time = time.time()
-                cur.execute("""
-                    SELECT 
-                        r.seq, r.node, r.edge, r.cost, r.agg_cost,
-                        w.geom, w.highway, w.length_m
-                    FROM pgr_dijkstra(
-                        'SELECT id, source, target, length_m as cost 
-                         FROM rr.ways 
-                         WHERE COALESCE(fail_prob, 0) < 0.5',
-                        %s, %s, directed := false
-                    ) r
-                    LEFT JOIN rr.ways w ON r.edge = w.id
-                    ORDER BY r.seq
-                """, (source_node, target_node))
-                route_segments = cur.fetchall()
+                sql_for_pgr = f"""
+                    SELECT id, source, target, cost, reverse_cost
+                    FROM ({base_routing_query}) q
+                    WHERE COALESCE(fail_prob, 0) < 1.0
+                """
+                route_query = f"SELECT * FROM pgr_dijkstra('{sql_for_pgr.replace('%', '%%')}', {source_node}, {target_node}, directed := true)"
+
+                geojson = build_route_geojson(cur, route_query, ())
                 compute_time_ms = (time.time() - start_time) * 1000
                 
-                if route_segments and len(route_segments) > 0:
+                if geojson:
                     results['filtered_dijkstra'] = {
-                        "route_geojson": build_route_geojson(cur, route_segments),
+                        "route_geojson": geojson,
                         "compute_time_ms": round(compute_time_ms, 2),
                         "algorithm": "Dijkstra Filtrado (Solo Seguros)"
                     }
@@ -420,73 +496,16 @@ def api_calculate_route():
 @app.route('/api/simulate_failures', methods=['POST'])
 def api_simulate_failures():
     """
-    API endpoint to simulate failures in network elements based on their probability.
-    Returns IDs of elements that have "failed" in this simulation.
+    DEPRECATED: This endpoint is no longer used for routing calculation.
+    Failure simulation is now integrated into the /api/calculate_route endpoint.
+    This can be kept for diagnostic purposes or removed.
     """
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        failed_edges = []
-        failed_nodes = []
-        
-        # Get all edges with fail_prob > 0
-        cur.execute("""
-            SELECT id, fail_prob
-            FROM rr.ways
-            WHERE COALESCE(fail_prob, 0) > 0
-        """)
-        
-        edges = cur.fetchall()
-        for edge in edges:
-            random_value = random.random()
-            if random_value < edge['fail_prob']:
-                failed_edges.append(edge['id'])
-        
-        # Get all nodes with fail_prob > 0 (if table exists)
-        cur.execute("""
-            SELECT EXISTS (
-                SELECT 1 
-                FROM information_schema.tables 
-                WHERE table_schema = 'rr' 
-                AND table_name = 'ways_vertices_pgr'
-            )
-        """)
-        
-        if cur.fetchone()[0]:
-            cur.execute("""
-                SELECT id, fail_prob
-                FROM rr.ways_vertices_pgr
-                WHERE COALESCE(fail_prob, 0) > 0
-            """)
-            
-            nodes = cur.fetchall()
-            for node in nodes:
-                random_value = random.random()
-                if random_value < node['fail_prob']:
-                    failed_nodes.append(node['id'])
-        
-        cur.close()
-        conn.close()
-        
-        return jsonify({
-            "failed_edges": failed_edges,
-            "failed_nodes": failed_nodes,
-            "total_failed": len(failed_edges) + len(failed_nodes)
-        })
-    
-    except psycopg2.Error as db_err:
-        app.logger.error(f"Database error simulating failures: {str(db_err)}")
-        return jsonify({
-            "error": "Error de base de datos al simular fallas",
-            "details": "Error al conectar con la base de datos. Revisa los logs del servidor para más información."
-        }), 500
-    except Exception as e:
-        app.logger.error(f"Error simulating failures: {str(e)}")
-        return jsonify({
-            "error": "No se pudo simular fallas",
-            "details": "Error inesperado. Revisa los logs del servidor para más información."
-        }), 500
+    return jsonify({
+        "message": "This endpoint is deprecated. Use 'simulate_failures: true' in /api/calculate_route.",
+        "failed_edges": [],
+        "failed_nodes": [],
+        "total_failed": 0
+    }), 410
 
 
 if __name__ == '__main__':
