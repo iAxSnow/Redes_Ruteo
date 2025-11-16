@@ -218,7 +218,8 @@ def build_route_geojson(cur, route_segments_query, params):
             'geometry', ST_AsGeoJSON(ST_LineMerge(ST_Union(w.geom ORDER BY r.seq)))::json
         ) AS geojson
         FROM route r
-        JOIN rr.ways w ON r.edge = w.id;
+        JOIN rr.ways w ON r.edge = w.id
+        WHERE r.edge != -1;
     """
     cur.execute(sql_query, params)
     result = cur.fetchone()
@@ -316,8 +317,11 @@ def api_calculate_route():
                     w.id, 
                     w.source, 
                     w.target, 
-                    w.length_m as cost, 
-                    w.length_m as reverse_cost,
+                    w.length_m as cost,
+                    CASE 
+                        WHEN w.oneway = true THEN -1
+                        ELSE w.length_m
+                    END as reverse_cost,
                     COALESCE(t.max_prob, 0) as fail_prob
                 FROM rr.ways w
                 LEFT JOIN (
@@ -359,6 +363,7 @@ def api_calculate_route():
                     FROM all_threats
                     GROUP BY way_id
                 ) t ON w.id = t.way_id
+                WHERE w.length_m > 0
             """
             app.logger.info("Using failure-simulated graph for routing (cost-weighted).")
         else:
@@ -367,10 +372,14 @@ def api_calculate_route():
                     w.id, 
                     w.source, 
                     w.target, 
-                    w.length_m as cost, 
-                    w.length_m as reverse_cost,
+                    w.length_m as cost,
+                    CASE 
+                        WHEN w.oneway = true THEN -1
+                        ELSE w.length_m
+                    END as reverse_cost,
                     COALESCE(w.fail_prob, 0) as fail_prob
                 FROM rr.ways w
+                WHERE w.length_m > 0
             """
 
         # --- Algorithm Implementations ---
