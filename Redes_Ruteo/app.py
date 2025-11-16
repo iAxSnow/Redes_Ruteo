@@ -351,11 +351,20 @@ def api_calculate_route():
                         way_id,
                         MAX(
                             CASE
+                                -- Waze threats
                                 WHEN source = 'waze' AND subtype = 'CLOSURE' THEN 0.7
                                 WHEN source = 'waze' AND subtype = 'TRAFFIC_JAM' THEN 0.2
-                                WHEN source = 'weather' AND subtype = 'HEAVY_RAIN' THEN 0.15 + (severity - 1) * 0.1
-                                WHEN source = 'weather' AND subtype = 'STRONG_WIND' THEN 0.12 + (severity - 1) * 0.1
-                                WHEN source = 'weather' AND subtype = 'LOW_VISIBILITY' THEN 0.25 + (severity - 1) * 0.1
+                                
+                                -- Weather threats (fire truck specific)
+                                WHEN source = 'weather' AND subtype = 'HEAVY_RAIN' THEN 0.15 + (severity - 1) * 0.08
+                                WHEN source = 'weather' AND subtype = 'STRONG_WIND' THEN 0.12 + (severity - 1) * 0.08
+                                WHEN source = 'weather' AND subtype = 'LOW_VISIBILITY' THEN 0.30 + (severity - 1) * 0.10
+                                WHEN source = 'weather' AND subtype = 'SNOW' THEN 0.20 + (severity - 1) * 0.10
+                                WHEN source = 'weather' AND subtype = 'FREEZING_CONDITIONS' THEN 0.35 + (severity - 1) * 0.15
+                                WHEN source = 'weather' AND subtype = 'EXTREME_HEAT' THEN 0.08 + (severity - 1) * 0.04
+                                WHEN source = 'weather' AND subtype = 'THUNDERSTORM' THEN 0.45
+                                
+                                -- Traffic calming
                                 WHEN source = 'traffic_calming' THEN 0.02
                                 ELSE 0.05
                             END
