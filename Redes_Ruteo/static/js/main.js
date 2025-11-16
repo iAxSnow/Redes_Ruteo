@@ -471,28 +471,33 @@ function calculateRoute() {
         let allBounds = [];
         Object.keys(data).forEach(algorithmKey => {
             const routeData = data[algorithmKey];
-            if (routeData && routeData.route_geojson && routeData.route_geojson.geometry && routeData.route_geojson.geometry.coordinates && routeData.route_geojson.geometry.coordinates.length > 0) {
+            // Check if we have valid route data with geometry
+            if (routeData && routeData.route_geojson && routeData.route_geojson.geometry) {
                 const checkbox = document.getElementById(`show-${algorithmKey.replace(/_/g, '-')}`);
                 const isVisible = checkbox ? checkbox.checked : true;
                 
-                const layer = L.geoJSON(routeData.route_geojson, {
-                    style: {
-                        color: routeColors[algorithmKey],
-                        weight: 4,
-                        opacity: isVisible ? 0.7 : 0
+                try {
+                    const layer = L.geoJSON(routeData.route_geojson, {
+                        style: {
+                            color: routeColors[algorithmKey],
+                            weight: 4,
+                            opacity: isVisible ? 0.7 : 0
+                        }
+                    });
+                    
+                    if (isVisible) {
+                        layer.addTo(map);
+                        // Only add bounds for visible routes
+                        const bounds = layer.getBounds();
+                        if (bounds.isValid()) {
+                            allBounds.push(bounds);
+                        }
                     }
-                });
-                
-                if (isVisible) {
-                    layer.addTo(map);
-                    // Only add bounds for visible routes
-                    const bounds = layer.getBounds();
-                    if (bounds.isValid()) {
-                        allBounds.push(bounds);
-                    }
+                    
+                    routeLayers[algorithmKey] = layer;
+                } catch (error) {
+                    console.error(`Error rendering ${algorithmKey} route:`, error);
                 }
-                
-                routeLayers[algorithmKey] = layer;
             }
         });
         
@@ -516,10 +521,11 @@ function calculateRoute() {
         
         // Display route info only for selected algorithms
         let routeInfoHtml = '<h4>Resultados de Ruteo</h4>';
+        let routesDisplayed = 0;
         
         Object.keys(data).forEach(algorithmKey => {
             const routeData = data[algorithmKey];
-            if (routeData && routeData.route_geojson) {
+            if (routeData && routeData.route_geojson && routeData.route_geojson.properties) {
                 const checkbox = document.getElementById(`show-${algorithmKey.replace(/_/g, '-')}`);
                 const isVisible = checkbox ? checkbox.checked : true;
                 
@@ -533,9 +539,14 @@ function calculateRoute() {
                             <span class="metric-value">${lengthKm} km (${routeData.compute_time_ms.toFixed(2)} ms)</span>
                         </div>
                     `;
+                    routesDisplayed++;
                 }
             }
         });
+        
+        if (routesDisplayed === 0) {
+            routeInfoHtml += '<p style="color: orange;">No se encontraron rutas o todas están ocultas</p>';
+        }
         
         routeInfo.innerHTML = routeInfoHtml;
         

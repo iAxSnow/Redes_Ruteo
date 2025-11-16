@@ -402,6 +402,8 @@ def api_calculate_route():
                     }
             except Exception as e:
                 app.logger.error(f"Error calculating dijkstra_dist route: {str(e)}")
+                import traceback
+                app.logger.error(traceback.format_exc())
         
         # Route 2: Dijkstra with probability-weighted cost
         if algorithm == 'all' or algorithm == 'dijkstra_prob':
@@ -410,7 +412,10 @@ def api_calculate_route():
                 sql_for_pgr = f"""
                     SELECT id, source, target, 
                            cost * (1 + COALESCE(fail_prob, 0) * 10) AS cost,
-                           reverse_cost * (1 + COALESCE(fail_prob, 0) * 10) AS reverse_cost
+                           CASE 
+                               WHEN reverse_cost = -1 THEN -1
+                               ELSE reverse_cost * (1 + COALESCE(fail_prob, 0) * 10)
+                           END AS reverse_cost
                     FROM ({base_routing_query}) q
                 """
                 route_query = f"SELECT * FROM pgr_dijkstra('{sql_for_pgr.replace('%', '%%')}', {source_node}, {target_node}, directed := true)"
@@ -426,6 +431,8 @@ def api_calculate_route():
                     }
             except Exception as e:
                 app.logger.error(f"Error calculating dijkstra_prob route: {str(e)}")
+                import traceback
+                app.logger.error(traceback.format_exc())
         
         # Route 3: A* with probability-weighted cost
         if algorithm == 'all' or algorithm == 'astar_prob':
@@ -434,8 +441,12 @@ def api_calculate_route():
                 sql_for_pgr = f"""
                     SELECT q.id, q.source, q.target, 
                            q.cost * (1 + COALESCE(q.fail_prob, 0) * 10) AS cost,
-                           q.reverse_cost * (1 + COALESCE(q.fail_prob, 0) * 10) AS reverse_cost,
-                           ST_X(sv.the_geom) as x1, ST_Y(sv.the_geom) as y1, ST_X(tv.the_geom) as x2, ST_Y(tv.the_geom) as y2
+                           CASE 
+                               WHEN q.reverse_cost = -1 THEN -1
+                               ELSE q.reverse_cost * (1 + COALESCE(q.fail_prob, 0) * 10)
+                           END AS reverse_cost,
+                           ST_X(sv.the_geom) as x1, ST_Y(sv.the_geom) as y1, 
+                           ST_X(tv.the_geom) as x2, ST_Y(tv.the_geom) as y2
                     FROM ({base_routing_query}) q
                     JOIN rr.ways_vertices_pgr sv ON q.source = sv.id
                     JOIN rr.ways_vertices_pgr tv ON q.target = tv.id
@@ -453,15 +464,17 @@ def api_calculate_route():
                     }
             except Exception as e:
                 app.logger.error(f"Error calculating astar_prob route: {str(e)}")
+                import traceback
+                app.logger.error(traceback.format_exc())
         
-        # Route 4: Filtered Dijkstra (only safe edges with fail_prob < 0.75)
+        # Route 4: Filtered Dijkstra (only safe edges with fail_prob < 0.5)
         if algorithm == 'all' or algorithm == 'filtered_dijkstra':
             try:
                 start_time = time.time()
                 sql_for_pgr = f"""
                     SELECT id, source, target, cost, reverse_cost
                     FROM ({base_routing_query}) q
-                    WHERE COALESCE(fail_prob, 0) < 1.0
+                    WHERE COALESCE(fail_prob, 0) < 0.5
                 """
                 route_query = f"SELECT * FROM pgr_dijkstra('{sql_for_pgr.replace('%', '%%')}', {source_node}, {target_node}, directed := true)"
 
@@ -474,8 +487,12 @@ def api_calculate_route():
                         "compute_time_ms": round(compute_time_ms, 2),
                         "algorithm": "Dijkstra Filtrado (Solo Seguros)"
                     }
+                else:
+                    app.logger.warning(f"Filtered Dijkstra found no route (may be too restrictive)")
             except Exception as e:
                 app.logger.error(f"Error calculating filtered_dijkstra route: {str(e)}")
+                import traceback
+                app.logger.error(traceback.format_exc())
         
         cur.close()
         conn.close()
