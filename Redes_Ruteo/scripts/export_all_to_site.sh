@@ -55,15 +55,11 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
-# ----- INICIO DE LA CORRECCIÓN 2: Carga explícita de .env -----
-# No usar load_dotenv() mágico, especificar la ruta que viene del bash
 project_root = os.environ.get('PROJECT_ROOT')
 if project_root:
     load_dotenv(dotenv_path=Path(project_root) / '.env')
 else:
-    print("Advertencia: PROJECT_ROOT no está seteado. dotenv podría fallar.")
     load_dotenv()
-# ----- FIN DE LA CORRECCIÓN 2 -----
 
 PGHOST = os.getenv("PGHOST", "localhost")
 PGPORT = int(os.getenv("PGPORT", "5432"))
@@ -71,11 +67,8 @@ PGDATABASE = os.getenv("PGDATABASE", "rr")
 PGUSER = os.getenv("PGUSER", "postgres")
 PGPASSWORD = os.getenv("PGPASSWORD", "postgres")
 
-# ----- INICIO DE LA CORRECCIÓN 3: Arreglar lógica de Path -----
-# Usar SCRIPT_DIR (que ahora está exportado) en lugar de __file__
 script_dir = Path(os.environ.get('SCRIPT_DIR'))
 OUT = script_dir.parent / "site" / "data" / "waze_threats.geojson"
-# ----- FIN DE LA CORRECCIÓN 3 -----
 OUT.parent.mkdir(parents=True, exist_ok=True)
 
 SQL = """
@@ -84,13 +77,13 @@ WITH feats AS (
            'type', 'Feature',
            'geometry', ST_AsGeoJSON(geom)::jsonb,
            'properties', jsonb_build_object(
-               'id', id,
-               'provider', provider,
+               'id', ext_id,
+               'provider', 'Waze',
                'ext_id', ext_id,
                'kind', kind,
                'subtype', subtype,
                'severity', severity,
-               'timestamp', timestamp,
+               'timestamp', created_at,
                'props', props
            )
          ) AS feature
@@ -101,18 +94,24 @@ FROM feats;
 """
 
 try:
-    with psycopg2.connect(host=PGHOST, port=PGPORT, dbname=PGDATABASE, user=PGUSER, password=PGPASSWORD) as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(SQL)
-            row = cur.fetchone()
-            fc = row["fc"]
+    conn = psycopg2.connect(host=PGHOST, port=PGPORT, dbname=PGDATABASE, user=PGUSER, password=PGPASSWORD)
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute(SQL)
+    result = cursor.fetchone()
     
-    # Usar la variable OUT definida arriba
-    OUT.write_text(json.dumps(fc, ensure_ascii=False, indent=2), encoding="utf-8")
-    count = len(fc.get('features', []))
-    print(f"✓ Exportadas {count} amenazas de Waze")
+    with open(OUT, 'w') as f:
+        json.dump(result['fc'], f, indent=2)
+    
+    count = len(result['fc'].get('features', []))
+    print(f"\033[32m✓\033[0m Exportadas {count} amenazas de Waze")
+
 except Exception as e:
-    print(f"⚠ No se pudieron exportar amenazas de Waze: {e}")
+    print(f"\033[31m⚠\033[0m No se pudieron exportar amenazas de Waze: {e}")
+finally:
+    if 'cursor' in locals() and cursor:
+        cursor.close()
+    if 'conn' in locals() and conn:
+        conn.close()
 EOF
 echo ""
 
@@ -125,14 +124,11 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
-# ----- INICIO DE LA CORRECCIÓN 2: Carga explícita de .env -----
 project_root = os.environ.get('PROJECT_ROOT')
 if project_root:
     load_dotenv(dotenv_path=Path(project_root) / '.env')
 else:
-    print("Advertencia: PROJECT_ROOT no está seteado. dotenv podría fallar.")
     load_dotenv()
-# ----- FIN DE LA CORRECCIÓN 2 -----
 
 PGHOST = os.getenv("PGHOST", "localhost")
 PGPORT = int(os.getenv("PGPORT", "5432"))
@@ -140,18 +136,20 @@ PGDATABASE = os.getenv("PGDATABASE", "rr")
 PGUSER = os.getenv("PGUSER", "postgres")
 PGPASSWORD = os.getenv("PGPASSWORD", "postgres")
 
+script_dir = Path(os.environ.get('SCRIPT_DIR'))
+OUT = script_dir.parent / "site" / "data" / "weather_threats.geojson"
+OUT.parent.mkdir(parents=True, exist_ok=True)
+
 SQL = """
 WITH feats AS (
   SELECT jsonb_build_object(
            'type', 'Feature',
            'geometry', ST_AsGeoJSON(geom)::jsonb,
            'properties', jsonb_build_object(
-               'id', id,
-               'provider', provider,
-               'weather_code', weather_code,
-               'weather_desc', weather_desc,
-               'severity', severity,
-               'timestamp', timestamp,
+               'id', ext_id,
+               'provider', 'OpenWeather',
+               'grid_id', ext_id,
+               'timestamp', created_at,
                'props', props
            )
          ) AS feature
@@ -162,23 +160,24 @@ FROM feats;
 """
 
 try:
-    with psycopg2.connect(host=PGHOST, port=PGPORT, dbname=PGDATABASE, user=PGUSER, password=PGPASSWORD) as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(SQL)
-            row = cur.fetchone()
-            fc = row["fc"]
+    conn = psycopg2.connect(host=PGHOST, port=PGPORT, dbname=PGDATABASE, user=PGUSER, password=PGPASSWORD)
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute(SQL)
+    result = cursor.fetchone()
     
-    # ----- INICIO DE LA CORRECCIÓN 3: Arreglar lógica de Path -----
-    script_dir = Path(os.environ.get('SCRIPT_DIR'))
-    out_path = script_dir.parent / "site" / "data" / "weather_threats.geojson"
-    # ----- FIN DE LA CORRECCIÓN 3 -----
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    out_path.write_text(json.dumps(fc, ensure_ascii=False, indent=2), encoding="utf-8")
-    count = len(fc.get('features', []))
-    print(f"✓ Exportadas {count} amenazas climáticas")
+    with open(OUT, 'w') as f:
+        json.dump(result['fc'], f, indent=2)
+
+    count = len(result['fc'].get('features', []))
+    print(f"\033[32m✓\033[0m Exportadas {count} amenazas climáticas")
+
 except Exception as e:
-    print(f"⚠ No se pudieron exportar amenazas climáticas: {e}")
+    print(f"\033[31m⚠\033[0m No se pudieron exportar amenazas climáticas: {e}")
+finally:
+    if 'cursor' in locals() and cursor:
+        cursor.close()
+    if 'conn' in locals() and conn:
+        conn.close()
 EOF
 echo ""
 
@@ -191,14 +190,11 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
-# ----- INICIO DE LA CORRECCIÓN 2: Carga explícita de .env -----
 project_root = os.environ.get('PROJECT_ROOT')
 if project_root:
     load_dotenv(dotenv_path=Path(project_root) / '.env')
 else:
-    print("Advertencia: PROJECT_ROOT no está seteado. dotenv podría fallar.")
     load_dotenv()
-# ----- FIN DE LA CORRECCIÓN 2 -----
 
 PGHOST = os.getenv("PGHOST", "localhost")
 PGPORT = int(os.getenv("PGPORT", "5432"))
@@ -206,15 +202,22 @@ PGDATABASE = os.getenv("PGDATABASE", "rr")
 PGUSER = os.getenv("PGUSER", "postgres")
 PGPASSWORD = os.getenv("PGPASSWORD", "postgres")
 
+script_dir = Path(os.environ.get('SCRIPT_DIR'))
+OUT = script_dir.parent / "site" / "data" / "calming_threats.geojson"
+OUT.parent.mkdir(parents=True, exist_ok=True)
+
 SQL = """
 WITH feats AS (
   SELECT jsonb_build_object(
            'type', 'Feature',
            'geometry', ST_AsGeoJSON(geom)::jsonb,
            'properties', jsonb_build_object(
-               'id', id,
-               'osm_id', osm_id,
-               'traffic_calming', traffic_calming,
+               'id', ext_id,
+               'provider', 'OSM',
+               'ext_id', ext_id,
+               'kind', kind,
+               'subtype', subtype,
+               'timestamp', created_at,
                'props', props
            )
          ) AS feature
@@ -225,23 +228,24 @@ FROM feats;
 """
 
 try:
-    with psycopg2.connect(host=PGHOST, port=PGPORT, dbname=PGDATABASE, user=PGUSER, password=PGPASSWORD) as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(SQL)
-            row = cur.fetchone()
-            fc = row["fc"]
+    conn = psycopg2.connect(host=PGHOST, port=PGPORT, dbname=PGDATABASE, user=PGUSER, password=PGPASSWORD)
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute(SQL)
+    result = cursor.fetchone()
     
-    # ----- INICIO DE LA CORRECCIÓN 3: Arreglar lógica de Path -----
-    script_dir = Path(os.environ.get('SCRIPT_DIR'))
-    out_path = script_dir.parent / "site" / "data" / "calming_threats.geojson"
-    # ----- FIN DE LA CORRECCIÓN 3 -----
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    out_path.write_text(json.dumps(fc, ensure_ascii=False, indent=2), encoding="utf-8")
-    count = len(fc.get('features', []))
-    print(f"✓ Exportados {count} reductores de velocidad")
+    with open(OUT, 'w') as f:
+        json.dump(result['fc'], f, indent=2)
+
+    count = len(result['fc'].get('features', []))
+    print(f"\033[32m✓\033[0m Exportados {count} reductores de velocidad")
+
 except Exception as e:
-    print(f"⚠ No se pudieron exportar reductores de velocidad: {e}")
+    print(f"\033[31m⚠\033[0m No se pudieron exportar reductores de velocidad: {e}")
+finally:
+    if 'cursor' in locals() and cursor:
+        cursor.close()
+    if 'conn' in locals() and conn:
+        conn.close()
 EOF
 echo ""
 

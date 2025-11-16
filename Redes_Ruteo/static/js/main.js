@@ -5,6 +5,11 @@ let map;
 let threatsLayer;
 let userMarker;
 let threatsData = null;
+let threatVisibility = {
+    waze: true,
+    weather: true,
+    calming: true
+};
 
 // Routing variables
 let startMarker = null;
@@ -141,7 +146,7 @@ function loadThreats() {
         })
         .then(data => {
             threatsData = data;
-            displayThreats(data);
+            displayThreats(); // No longer pass data directly
             updateStats(data);
             console.log(`Loaded ${data.features.length} threats`);
         })
@@ -151,15 +156,29 @@ function loadThreats() {
         });
 }
 
-// Display threats on the map
-function displayThreats(data) {
+// Display threats on the map based on visibility state
+function displayThreats() {
     // Clear existing threats
     threatsLayer.clearLayers();
     
-    if (!data || !data.features || data.features.length === 0) {
+    if (!threatsData || !threatsData.features || threatsData.features.length === 0) {
         console.log('No threats to display');
         return;
     }
+
+    // Filter features based on current visibility settings
+    const visibleFeatures = threatsData.features.filter(feature => {
+        const source = feature.properties.source;
+        if (source === 'waze' && threatVisibility.waze) return true;
+        if (source === 'weather' && threatVisibility.weather) return true;
+        if (source === 'traffic_calming' && threatVisibility.calming) return true;
+        return false;
+    });
+
+    const visibleThreats = {
+        type: "FeatureCollection",
+        features: visibleFeatures
+    };
     
     // Count threats by type for debugging
     const counts = {
@@ -169,7 +188,7 @@ function displayThreats(data) {
         other: 0
     };
     
-    data.features.forEach(feature => {
+    visibleFeatures.forEach(feature => {
         const source = feature.properties.source;
         if (counts[source] !== undefined) {
             counts[source]++;
@@ -178,10 +197,10 @@ function displayThreats(data) {
         }
     });
     
-    console.log(`Displaying threats - Total: ${data.features.length}, Waze: ${counts.waze}, Traffic Calming: ${counts.traffic_calming}, Weather: ${counts.weather}, Other: ${counts.other}`);
+    console.log(`Displaying threats - Total: ${visibleFeatures.length}, Waze: ${counts.waze}, Traffic Calming: ${counts.traffic_calming}, Weather: ${counts.weather}`);
     
     // Add GeoJSON layer with custom styling
-    L.geoJSON(data, {
+    L.geoJSON(visibleThreats, {
         pointToLayer: function(feature, latlng) {
             return createThreatMarker(feature, latlng);
         },
@@ -192,16 +211,6 @@ function displayThreats(data) {
             bindThreatPopup(feature, layer);
         }
     }).addTo(threatsLayer);
-    
-    // Fit map bounds to threats if possible
-    try {
-        const bounds = threatsLayer.getBounds();
-        if (bounds.isValid()) {
-            map.fitBounds(bounds, { maxZoom: 14, padding: [50, 50] });
-        }
-    } catch(e) {
-        console.log('Could not fit bounds:', e);
-    }
 }
 
 // Create marker for threat based on type
@@ -349,21 +358,6 @@ function updateStats(data) {
     statsInfo.innerHTML = statsHtml;
 }
 
-// Toggle threats visibility
-function toggleThreats(show) {
-    console.log(`Toggle threats visibility: ${show ? 'showing' : 'hiding'} all threats`);
-    if (show) {
-        if (threatsData) {
-            // Display ALL threats including Waze, Traffic Calming, and Weather
-            displayThreats(threatsData);
-        } else {
-            console.log('No threats data loaded yet');
-        }
-    } else {
-        threatsLayer.clearLayers();
-    }
-}
-
 // Map click handler for route point selection
 function onMapClick(e) {
     const lat = e.latlng.lat;
@@ -434,6 +428,9 @@ function calculateRoute() {
     const startLatLng = startMarker.getLatLng();
     const endLatLng = endMarker.getLatLng();
     
+    // Check if simulation is requested
+    const simulateFailures = document.getElementById('simulate-failures').checked;
+
     // Call API for all algorithms
     fetch('/api/calculate_route', {
         method: 'POST',
@@ -443,7 +440,8 @@ function calculateRoute() {
         body: JSON.stringify({
             start: { lat: startLatLng.lat, lng: startLatLng.lng },
             end: { lat: endLatLng.lat, lng: endLatLng.lng },
-            algorithm: 'all'
+            algorithm: 'all',
+            simulate_failures: simulateFailures // Pass simulation flag to backend
         })
     })
     .then(response => {
@@ -473,7 +471,7 @@ function calculateRoute() {
         let allBounds = [];
         Object.keys(data).forEach(algorithmKey => {
             const routeData = data[algorithmKey];
-            if (routeData && routeData.route_geojson) {
+            if (routeData && routeData.route_geojson && routeData.route_geojson.geometry && routeData.route_geojson.geometry.coordinates && routeData.route_geojson.geometry.coordinates.length > 0) {
                 const checkbox = document.getElementById(`show-${algorithmKey.replace(/_/g, '-')}`);
                 const isVisible = checkbox ? checkbox.checked : true;
                 
@@ -487,34 +485,55 @@ function calculateRoute() {
                 
                 if (isVisible) {
                     layer.addTo(map);
+                    // Only add bounds for visible routes
+                    const bounds = layer.getBounds();
+                    if (bounds.isValid()) {
+                        allBounds.push(bounds);
+                    }
                 }
                 
                 routeLayers[algorithmKey] = layer;
-                allBounds.push(layer.getBounds());
             }
         });
         
-        // Fit map to all routes
+        // Fit map to visible routes if we have valid bounds
         if (allBounds.length > 0) {
-            const combinedBounds = allBounds.reduce((acc, bounds) => acc.extend(bounds), allBounds[0]);
-            map.fitBounds(combinedBounds, { padding: [50, 50] });
+            try {
+                const combinedBounds = allBounds.reduce((acc, bounds) => acc.extend(bounds), allBounds[0]);
+                if (combinedBounds.isValid()) {
+                    map.fitBounds(combinedBounds, { padding: [50, 50] });
+                }
+            } catch (error) {
+                console.warn('Could not fit map bounds:', error);
+            }
+        } else {
+            // If no valid routes, fit to start and end markers
+            if (startMarker && endMarker) {
+                const markerBounds = L.latLngBounds([startMarker.getLatLng(), endMarker.getLatLng()]);
+                map.fitBounds(markerBounds, { padding: [50, 50] });
+            }
         }
         
-        // Display route info for all algorithms
+        // Display route info only for selected algorithms
         let routeInfoHtml = '<h4>Resultados de Ruteo</h4>';
         
         Object.keys(data).forEach(algorithmKey => {
             const routeData = data[algorithmKey];
             if (routeData && routeData.route_geojson) {
-                const lengthKm = (routeData.route_geojson.properties.total_length_m / 1000).toFixed(2);
-                const color = routeColors[algorithmKey];
+                const checkbox = document.getElementById(`show-${algorithmKey.replace(/_/g, '-')}`);
+                const isVisible = checkbox ? checkbox.checked : true;
                 
-                routeInfoHtml += `
-                    <div class="route-metric">
-                        <span class="metric-label" style="color: ${color}">⬤ ${routeData.algorithm}:</span>
-                        <span class="metric-value">${lengthKm} km (${routeData.compute_time_ms.toFixed(2)} ms)</span>
-                    </div>
-                `;
+                if (isVisible) {
+                    const lengthKm = (routeData.route_geojson.properties.total_length_m / 1000).toFixed(2);
+                    const color = routeColors[algorithmKey];
+                    
+                    routeInfoHtml += `
+                        <div class="route-metric">
+                            <span class="metric-label" style="color: ${color}">⬤ ${routeData.algorithm}:</span>
+                            <span class="metric-value">${lengthKm} km (${routeData.compute_time_ms.toFixed(2)} ms)</span>
+                        </div>
+                    `;
+                }
             }
         });
         
@@ -576,67 +595,12 @@ function toggleRouteVisibility(algorithmKey, visible) {
     }
 }
 
-// Simulate failures
-function simulateFailures() {
-    const simulationInfo = document.getElementById('simulation-info');
-    simulationInfo.innerHTML = '<p>Simulando fallas...</p>';
-    simulationInfo.classList.add('visible');
-    
-    fetch('/api/simulate_failures', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        }
-    })
-    .then(response => {
-        if (!response.ok) {
-            return response.json().then(data => {
-                throw new Error(data.error || 'Error al simular fallas');
-            }).catch(err => {
-                // If response is not JSON, throw generic error
-                if (err instanceof SyntaxError) {
-                    throw new Error('Error al simular fallas (código: ' + response.status + ')');
-                }
-                throw err;
-            });
-        }
-        return response.json();
-    })
-    .then(data => {
-        failedThreats = data.failed_edges || [];
-        
-        simulationInfo.innerHTML = `
-            <div class="route-metric">
-                <span class="metric-label">Elementos fallados:</span>
-                <span class="metric-value">${data.total_failed}</span>
-            </div>
-            <div class="route-metric">
-                <span class="metric-label">Arcos:</span>
-                <span class="metric-value">${data.failed_edges.length}</span>
-            </div>
-            <div class="route-metric">
-                <span class="metric-label">Nodos:</span>
-                <span class="metric-value">${data.failed_nodes.length}</span>
-            </div>
-        `;
-        
-        // Highlight failed threats on map
-        highlightFailedThreats();
-        
-        console.log(`Simulation: ${data.total_failed} elements failed`);
-    })
-    .catch(error => {
-        console.error('Error simulating failures:', error);
-        simulationInfo.innerHTML = `<p style="color: red;"><strong>Error:</strong> ${error.message}</p>`;
-    });
-}
-
 // Highlight failed threats
 function highlightFailedThreats() {
     // This would ideally highlight the specific threats that failed
     // For now, we'll update the display based on the showOnlyActive flag
     if (showOnlyActive) {
-        displayThreats(threatsData);
+        displayThreats();
     }
 }
 
@@ -651,9 +615,13 @@ document.addEventListener('DOMContentLoaded', function() {
     // Location button
     document.getElementById('locate-btn').addEventListener('click', getUserLocation);
     
-    // Show/hide threats checkbox
-    document.getElementById('show-threats').addEventListener('change', function(e) {
-        toggleThreats(e.target.checked);
+    // Threat layer checkboxes
+    document.querySelectorAll('.threat-checkbox').forEach(checkbox => {
+        checkbox.addEventListener('change', function(e) {
+            const threatType = e.target.dataset.threat; // 'waze', 'weather', 'calming'
+            threatVisibility[threatType] = e.target.checked;
+            displayThreats(); // Re-render threats with new visibility
+        });
     });
     
     // Route calculation buttons
@@ -668,21 +636,16 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
     
-    // Simulation checkboxes
+    // Simulation checkbox - now just triggers a recalculation
     document.getElementById('simulate-failures').addEventListener('change', function(e) {
-        if (e.target.checked) {
-            simulateFailures();
-        } else {
-            // Clear simulation
-            failedThreats = [];
-            const simulationInfo = document.getElementById('simulation-info');
-            simulationInfo.classList.remove('visible');
-            highlightFailedThreats();
+        // If start and end points are set, recalculate the route with the new simulation setting
+        if (startMarker && endMarker) {
+            calculateRoute();
         }
     });
     
     document.getElementById('show-only-active-threats').addEventListener('change', function(e) {
         showOnlyActive = e.target.checked;
-        displayThreats(threatsData);
+        displayThreats();
     });
 });

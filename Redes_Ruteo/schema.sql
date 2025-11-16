@@ -154,6 +154,34 @@ CREATE TABLE IF NOT EXISTS rr.amenazas_clima (
 );
 CREATE INDEX IF NOT EXISTS am_clima_geom_gix ON rr.amenazas_clima USING GIST (geom);
 CREATE INDEX IF NOT EXISTS am_clima_gin      ON rr.amenazas_clima USING GIN (props);
+CREATE INDEX IF NOT EXISTS am_waze_geom_gix ON rr.amenazas_waze USING GIST (geom);
+CREATE INDEX IF NOT EXISTS am_waze_gin      ON rr.amenazas_waze USING GIN (props);
+
+-- 5.2 Amenazas Traffic Calming (OSM)
+CREATE TABLE IF NOT EXISTS rr.amenazas_calming (
+  ext_id    TEXT PRIMARY KEY,               -- id compuesto (ej. "tc:osm_id")
+  kind      TEXT,                           -- "traffic_calming"
+  subtype   TEXT,                           -- "bump", "hump", "table", etc.
+  severity  INTEGER,                        -- típica = 1
+  props     JSONB,
+  geom      geometry(Point, 4326) NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS am_calming_geom_gix ON rr.amenazas_calming USING GIST (geom);
+CREATE INDEX IF NOT EXISTS am_calming_gin      ON rr.amenazas_calming USING GIN (props);
+
+-- 5.3 Amenazas Clima (OpenWeather)
+CREATE TABLE IF NOT EXISTS rr.amenazas_clima (
+  ext_id    TEXT PRIMARY KEY,               -- ej. "ow:<lat>,<lon>"
+  kind      TEXT,                           -- "weather"
+  subtype   TEXT,                           -- "RAIN_WIND" u otros
+  severity  INTEGER,                        -- 0..N (según umbrales)
+  props     JSONB,                          -- incluye metrics: rain_mm_h, wind_ms, ts, etc.
+  geom      geometry(Polygon, 4326) NOT NULL, -- celda cubierta
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS am_clima_geom_gix ON rr.amenazas_clima USING GIST (geom);
+CREATE INDEX IF NOT EXISTS am_clima_gin      ON rr.amenazas_clima USING GIN (props);
 
 -- =========================================================
 -- 6) Sugerencias de integridad / utilidades
