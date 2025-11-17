@@ -9,7 +9,7 @@ import os
 import json
 import time
 import random
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_from_directory
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
@@ -78,8 +78,18 @@ def get_db_connection():
 
 @app.route('/')
 def index():
-    """Render the main interface."""
-    return render_template('index.html')
+    """Serve the main interface."""
+    return send_from_directory('site', 'index.html')
+
+
+@app.route('/<path:path>')
+def static_files(path):
+    return send_from_directory('site', path)
+
+
+@app.route('/metadata/<path:filename>')
+def metadata_files(filename):
+    return send_from_directory('metadata', filename)
 
 
 @app.route('/api/threats')
@@ -202,29 +212,118 @@ def api_threats():
         }), 500
 
 
+@app.route('/api/hydrants')
+def api_hydrants():
+    """
+    API endpoint to retrieve all hydrants from the database.
+    Returns GeoJSON FeatureCollection with hydrants from multiple sources.
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        features = []
+        
+        # Query Hydrants
+        cur.execute("""
+            SELECT 
+                ext_id,
+                status,
+                provider,
+                props,
+                ST_AsGeoJSON(geom) as geometry
+            FROM rr.metadata_hydrants
+            WHERE geom IS NOT NULL
+        """)
+        
+        for row in cur.fetchall():
+            feature = {
+                "type": "Feature",
+                "properties": {
+                    "ext_id": row['ext_id'],
+                    "status": row['status'],
+                    "provider": row['provider']
+                },
+                "geometry": json.loads(row['geometry'])
+            }
+            # Merge additional properties from props JSONB field
+            if row['props']:
+                feature['properties'].update(row['props'])
+            
+            features.append(feature)
+        
+        cur.close()
+        conn.close()
+        
+        geojson = {
+            "type": "FeatureCollection",
+            "features": features
+        }
+        
+        return jsonify(geojson)
+    
+    except Exception as e:
+        # Log the error for debugging but don't expose details to clients
+        app.logger.error(f"Error loading hydrants: {str(e)}")
+        return jsonify({
+            "type": "FeatureCollection",
+            "features": [],
+            "error": "Failed to load hydrant data"
+        }), 500
+
+
 def build_route_geojson(cur, route_segments_query, params):
     """
     Helper function to build GeoJSON from a route query.
-    This version is more efficient as it builds the geometry in a single SQL query.
+    This version uses the nodes directly from pgr_dijkstra results.
     """
     sql_query = f"""
         WITH route AS ({route_segments_query})
         SELECT json_build_object(
             'type', 'Feature',
             'properties', json_build_object(
-                'total_length_m', SUM(w.length_m),
-                'total_cost', SUM(r.cost)
+                'total_length_m', (SELECT COALESCE(SUM(w.length_m), 0) 
+                                 FROM route r JOIN rr.ways w ON r.edge = w.id WHERE r.edge > 0),
+                'total_cost', (SELECT COALESCE(SUM(r.cost), 0) FROM route r WHERE r.edge > 0)
             ),
-            'geometry', ST_AsGeoJSON(ST_LineMerge(ST_Union(w.geom ORDER BY r.seq)))::json
-        ) AS geojson
-        FROM route r
-        JOIN rr.ways w ON r.edge = w.id;
+            'geometry', json_build_object(
+                'type', 'LineString',
+                'coordinates', (
+                    SELECT COALESCE(
+                        json_agg(json_build_array(ST_X(v.the_geom), ST_Y(v.the_geom)) ORDER BY r.seq),
+                        json_build_array()
+                    )
+                    FROM route r
+                    JOIN rr.ways_vertices_pgr v ON r.node = v.id
+                    WHERE r.node > 0
+                )
+            )
+        ) AS geojson;
     """
+    
     cur.execute(sql_query, params)
     result = cur.fetchone()
+    
     if result and result['geojson']:
-        return result['geojson']
-    return None
+        geojson = result['geojson']
+        coords = geojson.get('geometry', {}).get('coordinates', [])
+        print(f"GeoJSON result: coordinates length = {len(coords)}")
+        if len(coords) == 0:
+            print("No coordinates found - checking route query result")
+            # Debug: check what the route query returns
+            debug_query = f"SELECT COUNT(*) as route_count FROM ({route_segments_query}) r"
+            cur.execute(debug_query, params)
+            route_count = cur.fetchone()['route_count']
+            print(f"Route query returned {route_count} rows")
+        return geojson
+    
+    # Fallback: return empty route
+    print("Using fallback empty geometry")
+    return {
+        'type': 'Feature',
+        'properties': {'total_length_m': 0, 'total_cost': 0},
+        'geometry': {'type': 'LineString', 'coordinates': []}
+    }
 
 
 @app.route('/api/calculate_route', methods=['POST'])
@@ -263,14 +362,18 @@ def api_calculate_route():
         end_lat = float(end['lat'])
         end_lng = float(end['lng'])
         
+        print(f"Received coordinates: start=({start_lat}, {start_lng}), end=({end_lat}, {end_lng}))
+        
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
         # Find nearest node to start point
         cur.execute("""
-            SELECT id, ST_X(the_geom) as x, ST_Y(the_geom) as y
-            FROM rr.ways_vertices_pgr
-            ORDER BY the_geom <-> ST_SetSRID(ST_MakePoint(%s, %s), 4326)
+            SELECT v.id, ST_X(v.the_geom) as x, ST_Y(v.the_geom) as y
+            FROM rr.ways_vertices_pgr v
+            JOIN rr.components c ON v.id = c.node
+            WHERE c.component = 1
+            ORDER BY v.the_geom <-> ST_SetSRID(ST_MakePoint(%s, %s), 4326)
             LIMIT 1
         """, (start_lng, start_lat))
         
@@ -284,12 +387,15 @@ def api_calculate_route():
             }), 404
         
         source_node = start_node_row['id']
+        print(f"Start node found: {source_node}")
         
         # Find nearest node to end point
         cur.execute("""
-            SELECT id, ST_X(the_geom) as x, ST_Y(the_geom) as y
-            FROM rr.ways_vertices_pgr
-            ORDER BY the_geom <-> ST_SetSRID(ST_MakePoint(%s, %s), 4326)
+            SELECT v.id, ST_X(v.the_geom) as x, ST_Y(v.the_geom) as y
+            FROM rr.ways_vertices_pgr v
+            JOIN rr.components c ON v.id = c.node
+            WHERE c.component = 1
+            ORDER BY v.the_geom <-> ST_SetSRID(ST_MakePoint(%s, %s), 4326)
             LIMIT 1
         """, (end_lng, end_lat))
         
@@ -305,6 +411,7 @@ def api_calculate_route():
         target_node = end_node_row['id']
         target_x = end_node_row['x']
         target_y = end_node_row['y']
+        print(f"End node found: {target_node}")
         
         results = {}
         
@@ -316,8 +423,19 @@ def api_calculate_route():
                     w.id, 
                     w.source, 
                     w.target, 
-                    w.length_m as cost, 
-                    w.length_m as reverse_cost,
+                    w.length_m,
+                    w.cost_combined,
+                    w.width_m,
+                    w.highway,
+                    CASE 
+                        WHEN w.oneway = '-1' THEN -1
+                        ELSE w.length_m
+                    END as cost, 
+                    CASE 
+                        WHEN w.oneway = 'yes' THEN -1
+                        WHEN w.oneway = '-1' THEN w.length_m
+                        ELSE w.length_m
+                    END as reverse_cost,
                     COALESCE(t.max_prob, 0) as fail_prob
                 FROM rr.ways w
                 LEFT JOIN (
@@ -349,10 +467,11 @@ def api_calculate_route():
                             CASE
                                 WHEN source = 'waze' AND subtype = 'CLOSURE' THEN 0.7
                                 WHEN source = 'waze' AND subtype = 'TRAFFIC_JAM' THEN 0.2
-                                WHEN source = 'weather' AND subtype = 'HEAVY_RAIN' THEN 0.15 + (severity - 1) * 0.1
-                                WHEN source = 'weather' AND subtype = 'STRONG_WIND' THEN 0.12 + (severity - 1) * 0.1
-                                WHEN source = 'weather' AND subtype = 'LOW_VISIBILITY' THEN 0.25 + (severity - 1) * 0.1
-                                WHEN source = 'traffic_calming' THEN 0.02
+                                WHEN source = 'weather' AND subtype = 'HEAVY_RAIN' THEN 0.05 + (severity - 1) * 0.05
+                                WHEN source = 'weather' AND subtype = 'STRONG_WIND' THEN 0.04 + (severity - 1) * 0.05
+                                WHEN source = 'weather' AND subtype = 'LOW_VISIBILITY' THEN 0.08 + (severity - 1) * 0.05
+                                WHEN source = 'weather' AND subtype = 'SNOW' THEN 0.1 + (severity - 1) * 0.05
+                                WHEN source = 'traffic_calming' THEN 0.005
                                 ELSE 0.05
                             END
                         ) AS max_prob
@@ -367,8 +486,19 @@ def api_calculate_route():
                     w.id, 
                     w.source, 
                     w.target, 
-                    w.length_m as cost, 
-                    w.length_m as reverse_cost,
+                    w.length_m,
+                    w.cost_combined,
+                    w.width_m,
+                    w.highway,
+                    CASE 
+                        WHEN w.oneway = '-1' THEN -1
+                        ELSE w.length_m
+                    END as cost, 
+                    CASE 
+                        WHEN w.oneway = 'yes' THEN -1
+                        WHEN w.oneway = '-1' THEN w.length_m
+                        ELSE w.length_m
+                    END as reverse_cost,
                     COALESCE(w.fail_prob, 0) as fail_prob
                 FROM rr.ways w
             """
@@ -379,18 +509,24 @@ def api_calculate_route():
         if algorithm == 'all' or algorithm == 'dijkstra_dist':
             try:
                 start_time = time.time()
-                sql_for_pgr = f"SELECT id, source, target, cost, reverse_cost FROM ({base_routing_query}) q"
-                route_query = f"SELECT * FROM pgr_dijkstra('{sql_for_pgr.replace('%', '%%')}', {source_node}, {target_node}, directed := true)"
+                if simulate_failures:
+                    # Use dynamic threat-based routing
+                    sql_for_pgr = base_routing_query
+                else:
+                    # Use simple distance-based routing
+                    sql_for_pgr = "SELECT id, source, target, length_m as cost FROM rr.ways"
+                route_query = "SELECT seq, path_seq, node, edge, cost, agg_cost FROM pgr_dijkstra(%s, %s, %s, directed := false)"
+                params = (sql_for_pgr, source_node, target_node)
                 
-                geojson = build_route_geojson(cur, route_query, ())
+                app.logger.info(f"Route query: {route_query}")
+                geojson = build_route_geojson(cur, route_query, params)
                 compute_time_ms = (time.time() - start_time) * 1000
                 
-                if geojson:
-                    results['dijkstra_dist'] = {
-                        "route_geojson": geojson,
-                        "compute_time_ms": round(compute_time_ms, 2),
-                        "algorithm": "Dijkstra (Distancia)"
-                    }
+                results['dijkstra_dist'] = {
+                    "route_geojson": geojson or {"type": "Feature", "properties": {"total_length_m": 0, "total_cost": 0}, "geometry": {"type": "LineString", "coordinates": []}},
+                    "compute_time_ms": round(compute_time_ms, 2),
+                    "algorithm": "Dijkstra (Distancia)" + (" con Amenazas" if simulate_failures else "")
+                }
             except Exception as e:
                 app.logger.error(f"Error calculating dijkstra_dist route: {str(e)}")
         
@@ -398,23 +534,29 @@ def api_calculate_route():
         if algorithm == 'all' or algorithm == 'dijkstra_prob':
             try:
                 start_time = time.time()
-                sql_for_pgr = f"""
-                    SELECT id, source, target, 
-                           cost * (1 + COALESCE(fail_prob, 0) * 10) AS cost,
-                           reverse_cost * (1 + COALESCE(fail_prob, 0) * 10) AS reverse_cost
-                    FROM ({base_routing_query}) q
-                """
-                route_query = f"SELECT * FROM pgr_dijkstra('{sql_for_pgr.replace('%', '%%')}', {source_node}, {target_node}, directed := true)"
-
-                geojson = build_route_geojson(cur, route_query, ())
+                if simulate_failures:
+                    # Use dynamic threat-based routing with combined cost
+                    sql_for_pgr = f"""
+                        SELECT id, source, target, 
+                               length_m * (1 + COALESCE(fail_prob, 0) * 5) as cost
+                        FROM ({base_routing_query}) subq
+                        WHERE length_m * (1 + COALESCE(fail_prob, 0) * 5) > 0
+                    """
+                else:
+                    # Use pre-calculated cost_combined
+                    sql_for_pgr = "SELECT id, source, target, cost_combined as cost FROM rr.ways WHERE cost_combined > 0"
+                route_query = "SELECT seq, path_seq, node, edge, cost, agg_cost FROM pgr_dijkstra(%s, %s, %s, directed := false)"
+                params = (sql_for_pgr, source_node, target_node)
+                
+                app.logger.info(f"Route query: {route_query}")
+                geojson = build_route_geojson(cur, route_query, params)
                 compute_time_ms = (time.time() - start_time) * 1000
                 
-                if geojson:
-                    results['dijkstra_prob'] = {
-                        "route_geojson": geojson,
-                        "compute_time_ms": round(compute_time_ms, 2),
-                        "algorithm": "Dijkstra (Probabilidad)"
-                    }
+                results['dijkstra_prob'] = {
+                    "route_geojson": geojson or {"type": "Feature", "properties": {"total_length_m": 0, "total_cost": 0}, "geometry": {"type": "LineString", "coordinates": []}},
+                    "compute_time_ms": round(compute_time_ms, 2),
+                    "algorithm": "Dijkstra (Ponderado)" + (" con Amenazas" if simulate_failures else "")
+                }
             except Exception as e:
                 app.logger.error(f"Error calculating dijkstra_prob route: {str(e)}")
         
@@ -422,51 +564,74 @@ def api_calculate_route():
         if algorithm == 'all' or algorithm == 'astar_prob':
             try:
                 start_time = time.time()
-                sql_for_pgr = f"""
-                    SELECT q.id, q.source, q.target, 
-                           q.cost * (1 + COALESCE(q.fail_prob, 0) * 10) AS cost,
-                           q.reverse_cost * (1 + COALESCE(q.fail_prob, 0) * 10) AS reverse_cost,
-                           ST_X(sv.the_geom) as x1, ST_Y(sv.the_geom) as y1, ST_X(tv.the_geom) as x2, ST_Y(tv.the_geom) as y2
-                    FROM ({base_routing_query}) q
-                    JOIN rr.ways_vertices_pgr sv ON q.source = sv.id
-                    JOIN rr.ways_vertices_pgr tv ON q.target = tv.id
-                """
-                route_query = f"SELECT * FROM pgr_astar('{sql_for_pgr.replace('%', '%%')}', {source_node}, {target_node}, directed := true)"
-
-                geojson = build_route_geojson(cur, route_query, ())
+                if simulate_failures:
+                    # Use dynamic threat-based routing with combined cost and coordinates
+                    sql_for_pgr = f"""
+                        SELECT q.id, q.source, q.target, 
+                               q.length_m * (1 + COALESCE(q.fail_prob, 0) * 5) as cost,
+                               ST_X(sv.the_geom) as x1, ST_Y(sv.the_geom) as y1, 
+                               ST_X(tv.the_geom) as x2, ST_Y(tv.the_geom) as y2
+                        FROM ({base_routing_query}) q
+                        JOIN rr.ways_vertices_pgr sv ON q.source = sv.id
+                        JOIN rr.ways_vertices_pgr tv ON q.target = tv.id
+                        WHERE q.length_m * (1 + COALESCE(q.fail_prob, 0) * 5) > 0
+                    """
+                else:
+                    # Use pre-calculated cost_combined with coordinates
+                    sql_for_pgr = """
+                        SELECT q.id, q.source, q.target, 
+                               q.cost_combined as cost,
+                               ST_X(sv.the_geom) as x1, ST_Y(sv.the_geom) as y1, 
+                               ST_X(tv.the_geom) as x2, ST_Y(tv.the_geom) as y2
+                        FROM rr.ways q
+                        JOIN rr.ways_vertices_pgr sv ON q.source = sv.id
+                        JOIN rr.ways_vertices_pgr tv ON q.target = tv.id
+                        WHERE q.cost_combined > 0
+                    """
+                route_query = "SELECT seq, path_seq, node, edge, cost, agg_cost FROM pgr_astar(%s, %s, %s, directed := false)"
+                params = (sql_for_pgr, source_node, target_node)
+                
+                app.logger.info(f"Route query: {route_query}")
+                geojson = build_route_geojson(cur, route_query, params)
                 compute_time_ms = (time.time() - start_time) * 1000
                 
-                if geojson:
-                    results['astar_prob'] = {
-                        "route_geojson": geojson,
-                        "compute_time_ms": round(compute_time_ms, 2),
-                        "algorithm": "A* (Probabilidad)"
-                    }
+                results['astar_prob'] = {
+                    "route_geojson": geojson or {"type": "Feature", "properties": {"total_length_m": 0, "total_cost": 0}, "geometry": {"type": "LineString", "coordinates": []}},
+                    "compute_time_ms": round(compute_time_ms, 2),
+                    "algorithm": "A* (Ponderado)" + (" con Amenazas" if simulate_failures else "")
+                }
             except Exception as e:
                 app.logger.error(f"Error calculating astar_prob route: {str(e)}")
         
-        # Route 4: Filtered Dijkstra (only safe edges with fail_prob < 0.75)
-        if algorithm == 'all' or algorithm == 'filtered_dijkstra':
+        # Route 4: CPLEX-like optimization (risk-constrained shortest path)
+        if algorithm == 'all' or algorithm == 'cplex':
             try:
                 start_time = time.time()
-                sql_for_pgr = f"""
-                    SELECT id, source, target, cost, reverse_cost
-                    FROM ({base_routing_query}) q
-                    WHERE COALESCE(fail_prob, 0) < 1.0
-                """
-                route_query = f"SELECT * FROM pgr_dijkstra('{sql_for_pgr.replace('%', '%%')}', {source_node}, {target_node}, directed := true)"
-
-                geojson = build_route_geojson(cur, route_query, ())
+                if simulate_failures:
+                    # Use dynamic threat-based routing
+                    sql_for_pgr = f"""
+                        SELECT id, source, target, length_m * (1 + COALESCE(fail_prob, 0) * 5) as cost
+                        FROM ({base_routing_query}) subq
+                        WHERE length_m * (1 + COALESCE(fail_prob, 0) * 5) > 0
+                    """
+                else:
+                    # Use pre-calculated cost_combined
+                    sql_for_pgr = "SELECT id, source, target, cost_combined as cost FROM rr.ways WHERE cost_combined > 0"
+                route_query = "SELECT seq, path_seq, node, edge, cost, agg_cost FROM pgr_dijkstra(%s, %s, %s, directed := false)"
+                params = (sql_for_pgr, source_node, target_node)
+                
+                geojson = build_route_geojson(cur, route_query, params)
                 compute_time_ms = (time.time() - start_time) * 1000
                 
-                if geojson:
-                    results['filtered_dijkstra'] = {
-                        "route_geojson": geojson,
-                        "compute_time_ms": round(compute_time_ms, 2),
-                        "algorithm": "Dijkstra Filtrado (Solo Seguros)"
-                    }
+                results['cplex'] = {
+                    "route_geojson": geojson or {"type": "Feature", "properties": {"total_length_m": 0, "total_cost": 0}, "geometry": {"type": "LineString", "coordinates": []}},
+                    "compute_time_ms": round(compute_time_ms, 2),
+                    "algorithm": "CPLEX" + (" con Amenazas" if simulate_failures else "")
+                }
             except Exception as e:
-                app.logger.error(f"Error calculating filtered_dijkstra route: {str(e)}")
+                app.logger.error(f"Error calculating cplex route: {str(e)}")
+            except Exception as e:
+                app.logger.error(f"Error calculating cplex route: {str(e)}")
         
         cur.close()
         conn.close()
@@ -512,4 +677,4 @@ if __name__ == '__main__':
     # Debug mode should be disabled in production
     # Set via environment variable: export FLASK_DEBUG=1 for development
     debug_mode = os.getenv('FLASK_DEBUG', '0') == '1'
-    app.run(debug=debug_mode, host='0.0.0.0', port=5000)
+    app.run(debug=debug_mode, host='0.0.0.0', port=5001)

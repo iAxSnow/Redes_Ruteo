@@ -126,7 +126,7 @@ def main():
                 int(p["id"]), int(p["osm_id"]), int(p["source"]), int(p["target"]),
                 json.dumps(geom),
                 float(length_m),
-                p.get("highway"), bool(p.get("oneway", False)),
+                p.get("highway"), p.get("oneway") or None,
                 p.get("maxspeed_kmh"), p.get("lanes"),
                 p.get("surface"), p.get("access"),
                 json.dumps({

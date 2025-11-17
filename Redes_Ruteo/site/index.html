@@ -10,10 +10,38 @@
     html, body, #map { height: 100%; margin: 0; }
     .legend { background: white; padding: 6px 8px; border-radius: 4px; font: 12px/14px Arial; }
     .legend .title { font-weight: bold; margin-bottom: 6px; }
+    #controls { position: absolute; top: 10px; right: 10px; z-index: 1000; background: white; padding: 10px; border-radius: 4px; }
   </style>
 </head>
 <body>
 <div id="map"></div>
+<div id="controls">
+  <h4>Ruteo</h4>
+  <div>
+    <input type="checkbox" id="useLocation" /> Usar ubicación actual como inicio
+  </div>
+  <button id="setStart">Establecer Inicio</button>
+  <button id="setEnd">Establecer Fin</button>
+  <h5>Algoritmos</h5>
+  <div>
+    <input type="checkbox" id="dijkstra_dist" checked /> Dijkstra (Distancia)<br>
+    <input type="checkbox" id="dijkstra_prob" /> Dijkstra (Ponderado)<br>
+    <input type="checkbox" id="astar_prob" /> A* (Ponderado)<br>
+    <input type="checkbox" id="cplex" /> CPLEX (Optimización)
+  </div>
+  <div>
+    <input type="checkbox" id="simulate_failures" /> Simular fallas
+  </div>
+  <button id="calculate">Calcular Ruta</button>
+  <h5>Capas</h5>
+  <div>
+    <input type="checkbox" id="showWaze" checked /> Waze Incidentes<br>
+    <input type="checkbox" id="showWeather" /> Amenazas Clima<br>
+    <input type="checkbox" id="showCalming" /> Amenazas Calming<br>
+    <input type="checkbox" id="showHydrants" /> Hidrantes
+  </div>
+  <div id="status"></div>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
@@ -24,9 +52,48 @@
     maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
   }).addTo(map);
 
+  // Capas overlays para el control de capas
   const overlays = {};
 
-  // ===== Waze incidents layer =====
+  // ===== Hydrants layer =====
+  function pointToLayerHydrant(feature, latlng) {
+    return L.circleMarker(latlng, {
+      radius: 4,
+      weight: 1,
+      opacity: 1,
+      fillOpacity: 0.8,
+      color: 'red',
+      fillColor: 'red'
+    });
+  }
+
+  function popupHydrant(feature, layer) {
+    const p = feature.properties || {};
+    const extId = p.ext_id ? `<div><b>ID:</b> ${p.ext_id}</div>` : "";
+    const provider = p.provider ? `<div><b>Proveedor:</b> ${p.provider}</div>` : "";
+    const status = p.status ? `<div><b>Estado:</b> ${p.status}</div>` : "";
+    const tags = p.tags ? `<div><b>Etiquetas:</b> ${JSON.stringify(p.tags)}</div>` : "";
+    layer.bindPopup(`<b>Hidrante</b>${extId}${provider}${status}${tags}`);
+  }
+
+  // ===== Traffic Calming layer =====
+  function pointToLayerCalming(feature, latlng) {
+    return L.circleMarker(latlng, {
+      radius: 3,
+      weight: 1,
+      opacity: 1,
+      fillOpacity: 0.7,
+      color: 'purple',
+      fillColor: 'purple'
+    });
+  }
+
+  function popupCalming(feature, layer) {
+    const p = feature.properties || {};
+    const subtype = p.subtype ? `<div><b>Tipo:</b> ${p.subtype}</div>` : "";
+    const severity = p.severity != null ? `<div><b>Severidad:</b> ${p.severity}</div>` : "";
+    layer.bindPopup(`<b>Amenaza Calming</b>${subtype}${severity}`);
+  }
   const wazeStylePoint = (f) => ({
     radius: f.properties.subtype === "CLOSURE" ? 6 : 5,
     weight: 1,
@@ -57,7 +124,19 @@
     layer.bindPopup(`<b>${title}</b>${desc}${street}${sev}`);
   }
 
-  fetch('data/waze_incidents.geojson')
+  // ===== Road Metadata layer =====
+  function popupRoad(feature, layer) {
+    const p = feature.properties || {};
+    const highway = p.highway ? `<div><b>Tipo:</b> ${p.highway}</div>` : "";
+    const lanes = p.lanes ? `<div><b>Carriles:</b> ${p.lanes}</div>` : "";
+    const width = p.width_m ? `<div><b>Ancho:</b> ${p.width_m}m</div>` : "";
+    const maxwidth = p.maxwidth_m ? `<div><b>Ancho máx:</b> ${p.maxwidth_m}m</div>` : "";
+    const oneway = p.oneway !== undefined ? `<div><b>Sentido único:</b> ${p.oneway ? 'Sí' : 'No'}</div>` : "";
+    const osmId = p.osm_id ? `<div><b>OSM ID:</b> ${p.osm_id}</div>` : "";
+    layer.bindPopup(`<b>Carretera</b>${highway}${lanes}${width}${maxwidth}${oneway}${osmId}`);
+  }
+
+  const wazePromise = fetch('/data/waze_threats.geojson')
     .then(r => r.json())
     .then(gj => {
       const wazeLayer = L.geoJSON(gj, {
@@ -66,14 +145,241 @@
         onEachFeature: popupWaze
       });
       overlays["Waze — Incidentes/Cierres"] = wazeLayer;
-      wazeLayer.addTo(map);
-      L.control.layers(null, overlays, { collapsed: false }).addTo(map);
+      if (document.getElementById('showWaze').checked) {
+        wazeLayer.addTo(map);
+      }
       try { map.fitBounds(wazeLayer.getBounds(), { maxZoom: 14 }); } catch(e) {}
     })
     .catch(() => {
-      console.warn("No se pudo cargar data/waze_incidents.geojson");
-      L.control.layers(null, overlays, { collapsed: false }).addTo(map);
+      console.warn("No se pudo cargar data/waze_threats.geojson");
     });
+
+  const hydrantsPromise = fetch('/api/hydrants')
+    .then(r => r.json())
+    .then(gj => {
+      const hydrantsLayer = L.geoJSON(gj, {
+        pointToLayer: pointToLayerHydrant,
+        onEachFeature: popupHydrant
+      });
+      overlays["Hidrantes"] = hydrantsLayer;
+      if (document.getElementById('showHydrants').checked) {
+        hydrantsLayer.addTo(map);
+      }
+    })
+    .catch(() => {
+      console.warn("No se pudo cargar /api/hydrants");
+    });
+
+  const weatherPromise = fetch('/data/weather_threats.geojson')
+    .then(r => r.json())
+    .then(gj => {
+      const weatherLayer = L.geoJSON(gj, {
+        style: { color: 'orange', weight: 2 }
+      });
+      overlays["Amenazas Clima"] = weatherLayer;
+      if (document.getElementById('showWeather').checked) {
+        weatherLayer.addTo(map);
+      }
+    })
+    .catch(() => {
+      console.warn("No se pudo cargar /data/weather_threats.geojson");
+    });
+
+  const calmingPromise = fetch('/data/calming_threats.geojson')
+    .then(r => r.json())
+    .then(gj => {
+      const calmingLayer = L.geoJSON(gj, {
+        pointToLayer: pointToLayerCalming,
+        onEachFeature: popupCalming
+      });
+      overlays["Amenazas Calming"] = calmingLayer;
+      if (document.getElementById('showCalming').checked) {
+        calmingLayer.addTo(map);
+      }
+    })
+    .catch(() => {
+      console.warn("No se pudo cargar /data/calming_threats.geojson");
+    });
+
+  // ===== Road Metadata layers =====
+  const roadWidthPromise = fetch('/metadata/road_widths.geojson')
+    .then(r => r.json())
+    .then(gj => {
+      const roadWidthLayer = L.geoJSON(gj, {
+        style: { color: 'blue', weight: 3, opacity: 0.3 },
+        onEachFeature: popupRoad
+      });
+      overlays["Metadata — Ancho de Carreteras"] = roadWidthLayer;
+      // Don't add to map by default as it might be too cluttered
+    })
+    .catch(() => {
+      console.warn("No se pudo cargar metadata/road_widths.geojson");
+    });
+
+  const roadOnewayPromise = fetch('/metadata/road_oneway.geojson')
+    .then(r => r.json())
+    .then(gj => {
+      const roadOnewayLayer = L.geoJSON(gj, {
+        style: { color: 'green', weight: 3, opacity: 0.3 },
+        onEachFeature: popupRoad
+      });
+      overlays["Metadata — Sentido Único"] = roadOnewayLayer;
+      // Don't add to map by default as it might be too cluttered
+    })
+    .catch(() => {
+      console.warn("No se pudo cargar metadata/road_oneway.geojson");
+    });
+
+  Promise.allSettled([wazePromise, hydrantsPromise, weatherPromise, calmingPromise, roadWidthPromise, roadOnewayPromise]).then(() => {
+    L.control.layers(null, overlays, { collapsed: false }).addTo(map);
+  });
+
+  // ===== Routing functionality =====
+  let startMarker = null;
+  let endMarker = null;
+  let routeLayers = {};
+  let settingStart = false;
+  let settingEnd = false;
+
+  // Layer management
+  const layerCheckboxes = {
+    showWaze: 'Waze — Incidentes/Cierres',
+    showWeather: 'Amenazas Clima',
+    showCalming: 'Amenazas Calming',
+    showHydrants: 'Hidrantes'
+  };
+
+  Object.keys(layerCheckboxes).forEach(id => {
+    document.getElementById(id).addEventListener('change', (e) => {
+      const layerName = layerCheckboxes[id];
+      if (e.target.checked) {
+        if (overlays[layerName]) overlays[layerName].addTo(map);
+      } else {
+        if (overlays[layerName]) map.removeLayer(overlays[layerName]);
+      }
+    });
+  });
+
+  document.getElementById('useLocation').addEventListener('change', () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition((position) => {
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        if (startMarker) map.removeLayer(startMarker);
+        startMarker = L.marker([lat, lng], { color: 'green' }).addTo(map);
+        document.getElementById('status').textContent = 'Ubicación actual establecida como inicio.';
+      }, () => {
+        document.getElementById('status').textContent = 'No se pudo obtener la ubicación.';
+      });
+    } else {
+      document.getElementById('status').textContent = 'Geolocalización no soportada.';
+    }
+  });
+
+  document.getElementById('setStart').addEventListener('click', () => {
+    settingStart = true;
+    settingEnd = false;
+    document.getElementById('status').textContent = 'Haz clic en el mapa para establecer el punto de inicio.';
+  });
+
+  document.getElementById('setEnd').addEventListener('click', () => {
+    settingEnd = true;
+    settingStart = false;
+    document.getElementById('status').textContent = 'Haz clic en el mapa para establecer el punto de fin.';
+  });
+
+  document.getElementById('calculate').addEventListener('click', async () => {
+    if (!startMarker || !endMarker) {
+      document.getElementById('status').textContent = 'Establece puntos de inicio y fin primero.';
+      return;
+    }
+    const start = startMarker.getLatLng();
+    const end = endMarker.getLatLng();
+    const algorithms = ['dijkstra_dist', 'dijkstra_prob', 'astar_prob', 'cplex'].filter(id => document.getElementById(id).checked);
+    const simulate_failures = document.getElementById('simulate_failures').checked;
+    
+    try {
+      const response = await fetch('/api/calculate_route', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          start: { lat: start.lat, lng: start.lng },
+          end: { lat: end.lat, lng: end.lng },
+          algorithm: 'all',
+          simulate_failures: simulate_failures
+        })
+      });
+      
+      console.log(`Calculating route from (${start.lat}, ${start.lng}) to (${end.lat}, ${end.lng})`);
+      const data = await response.json();
+
+      if (data.error) {
+        document.getElementById('status').textContent = 'Error: ' + data.error;
+        return;
+      }
+
+      // Add routes for each algorithm that was requested
+      let statusMessages = [];
+      
+      for (const algorithm of algorithms) {
+        if (data[algorithm]) {
+          const routeGeojson = data[algorithm].route_geojson;
+          const color = algorithm === 'dijkstra_dist' ? 'blue' : 
+                       algorithm === 'dijkstra_prob' ? 'red' : 
+                       algorithm === 'astar_prob' ? 'green' : 'purple';
+          
+          console.log(`Processing route for ${algorithm}`);
+          console.log('Route GeoJSON:', routeGeojson);
+          
+          if (routeGeojson && routeGeojson.geometry && routeGeojson.geometry.coordinates && Array.isArray(routeGeojson.geometry.coordinates) && routeGeojson.geometry.coordinates.length > 0) {
+            console.log(`Using real route geometry for ${algorithm} - ${routeGeojson.geometry.coordinates.length} points`);
+            routeLayers[algorithm] = L.geoJSON(routeGeojson, {
+              style: { color: color, weight: 6, opacity: 0.9 }
+            }).addTo(map);
+          } else {
+            console.log(`No route could be calculated for ${algorithm} - showing error popup`);
+            // Show error popup when no route can be calculated
+            const start = startMarker.getLatLng();
+            const end = endMarker.getLatLng();
+            const centerLat = (start.lat + end.lat) / 2;
+            const centerLng = (start.lng + end.lng) / 2;
+            
+            L.popup()
+              .setLatLng([centerLat, centerLng])
+              .setContent(`<div style="text-align: center; color: red; font-weight: bold;">
+                ❌ No se pudo calcular la ruta ${algorithm.replace('_', ' ').toUpperCase()}<br>
+                <small>Verifique coordenadas</small>
+              </div>`)
+              .openOn(map);
+            
+            // Still add an empty layer to maintain the structure
+            routeLayers[algorithm] = L.layerGroup().addTo(map);
+          }
+          
+          statusMessages.push(`${algorithm}: ${data[algorithm].compute_time_ms}ms`);
+        }
+      }
+      
+      document.getElementById('status').textContent = `Rutas calculadas: ${statusMessages.join(', ')}`;
+    } catch (error) {
+      document.getElementById('status').textContent = 'Error al calcular las rutas.';
+      console.error(error);
+    }
+  });
+
+  map.on('click', (e) => {
+    if (settingStart) {
+      if (startMarker) map.removeLayer(startMarker);
+      startMarker = L.marker(e.latlng, { color: 'green' }).addTo(map);
+      settingStart = false;
+      document.getElementById('status').textContent = 'Punto de inicio establecido.';
+    } else if (settingEnd) {
+      if (endMarker) map.removeLayer(endMarker);
+      endMarker = L.marker(e.latlng, { color: 'red' }).addTo(map);
+      settingEnd = false;
+      document.getElementById('status').textContent = 'Punto de fin establecido.';
+    }
+  });
 </script>
 </body>
 </html>

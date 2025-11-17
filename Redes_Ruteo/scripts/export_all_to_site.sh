@@ -29,7 +29,7 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}============================================================${NC}"
-echo -e "${BLUE}EXPORTANDO TODAS LAS AMENAZAS AL SITIO WEB${NC}"
+echo -e "${BLUE}EXPORTANDO TODAS LAS AMENAZAS Y HIDRANTES AL SITIO WEB${NC}"
 echo -e "${BLUE}============================================================${NC}"
 echo ""
 
@@ -182,7 +182,7 @@ EOF
 echo ""
 
 # Export Traffic Calming threats
-echo -e "${YELLOW}[4/4]${NC} Exportando reductores de velocidad (traffic calming)..."
+echo -e "${YELLOW}[4/5]${NC} Exportando reductores de velocidad (traffic calming)..."
 python3 << 'EOF'
 import os, json
 from pathlib import Path
@@ -249,6 +249,72 @@ finally:
 EOF
 echo ""
 
+# Export Hydrants
+echo -e "${YELLOW}[5/5]${NC} Exportando hidrantes..."
+python3 << 'EOF'
+import os, json
+from pathlib import Path
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from dotenv import load_dotenv
+
+project_root = os.environ.get('PROJECT_ROOT')
+if project_root:
+    load_dotenv(dotenv_path=Path(project_root) / '.env')
+else:
+    load_dotenv()
+
+PGHOST = os.getenv("PGHOST", "localhost")
+PGPORT = int(os.getenv("PGPORT", "5432"))
+PGDATABASE = os.getenv("PGDATABASE", "rr")
+PGUSER = os.getenv("PGUSER", "postgres")
+PGPASSWORD = os.getenv("PGPASSWORD", "postgres")
+
+script_dir = Path(os.environ.get('SCRIPT_DIR'))
+OUT = script_dir.parent / "site" / "data" / "hydrants.geojson"
+OUT.parent.mkdir(parents=True, exist_ok=True)
+
+SQL = """
+WITH feats AS (
+  SELECT jsonb_build_object(
+           'type', 'Feature',
+           'geometry', ST_AsGeoJSON(geom)::jsonb,
+           'properties', jsonb_build_object(
+               'id', ext_id,
+               'status', status,
+               'provider', provider,
+               'props', props
+           )
+         ) AS feature
+  FROM rr.metadata_hydrants
+  WHERE geom IS NOT NULL
+)
+SELECT jsonb_build_object('type', 'FeatureCollection', 'features', coalesce(jsonb_agg(feature), '[]'::jsonb)) AS fc
+FROM feats;
+"""
+
+try:
+    conn = psycopg2.connect(host=PGHOST, port=PGPORT, dbname=PGDATABASE, user=PGUSER, password=PGPASSWORD)
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute(SQL)
+    result = cursor.fetchone()
+    
+    with open(OUT, 'w') as f:
+        json.dump(result['fc'], f, indent=2)
+
+    count = len(result['fc'].get('features', []))
+    print(f"\033[32m✓\033[0m Exportados {count} hidrantes")
+
+except Exception as e:
+    print(f"\033[31m⚠\033[0m No se pudieron exportar hidrantes: {e}")
+finally:
+    if 'cursor' in locals() and cursor:
+        cursor.close()
+    if 'conn' in locals() and conn:
+        conn.close()
+EOF
+echo ""
+
 echo -e "${BLUE}============================================================${NC}"
 echo -e "${GREEN}✅ EXPORTACIÓN COMPLETADA${NC}"
 echo -e "${BLUE}============================================================${NC}"
@@ -257,7 +323,8 @@ echo -e "Archivos generados en: ${YELLOW}$SITE_DATA_DIR${NC}"
 echo -e "  - waze_threats.geojson"
 echo -e "  - weather_threats.geojson"
 echo -e "  - calming_threats.geojson"
+echo -e "  - hydrants.geojson"
 echo ""
 echo -e "Estos archivos pueden ser usados por la aplicación web para"
-echo -e "visualizar las amenazas en el mapa."
+echo -e "visualizar las amenazas y hidrantes en el mapa."
 echo ""

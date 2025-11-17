@@ -22,10 +22,10 @@ ROOT = Path(__file__).resolve().parent
 WAYS_PATH  = ROOT / "ways.geojson"
 NODES_PATH = ROOT / "nodes.geojson"
 
-BBOX_S=float(os.getenv("BBOX_S","-33.8"))
-BBOX_W=float(os.getenv("BBOX_W","-70.95"))
-BBOX_N=float(os.getenv("BBOX_N","-33.2"))
-BBOX_E=float(os.getenv("BBOX_E","-70.45"))
+BBOX_S=float(os.getenv("BBOX_S","-33.8")) - 0.1
+BBOX_W=float(os.getenv("BBOX_W","-70.95")) - 0.1
+BBOX_N=float(os.getenv("BBOX_N","-33.2")) + 0.1
+BBOX_E=float(os.getenv("BBOX_E","-70.45")) + 0.1
 
 ROWS=int(os.getenv("OVERPASS_ROWS","6"))
 COLS=int(os.getenv("OVERPASS_COLS","6"))
@@ -63,6 +63,7 @@ def build_query(s,w,n,e):
     (
       way[\"highway\"~\"^{HW}$\"]({s},{w},{n},{e});
       >;
+      node({s},{w},{n},{e});
     );
     out body;
     """
@@ -133,7 +134,7 @@ def main():
         # normalize
         highway=tags.get("highway")
         oneway_raw=tags.get("oneway")
-        oneway=True if oneway_raw in ("yes","-1","true","1") else False if oneway_raw in ("no","false","0") else None
+        oneway = oneway_raw
         # lanes and maxspeed
         lanes=None
         try:

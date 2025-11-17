@@ -29,7 +29,7 @@ PGPASSWORD = os.getenv("PGPASSWORD", "postgres")
 # --- Simulation Parameters ---
 # Coordinates for a sample route (e.g., from Palacio de La Moneda to Costanera Center)
 DEFAULT_START_COORDS = (-33.4430, -70.6530)
-DEFAULT_END_COORDS = (-33.4175, -70.6065)
+DEFAULT_END_COORDS = (-33.45, -70.66)
 
 # Probability threshold to consider an edge "failed"
 FAILURE_PROBABILITY_THRESHOLD = 0.75
@@ -60,10 +60,7 @@ def find_nearest_node(conn, lat, lon):
         cur.execute("""
             SELECT id
             FROM rr.ways_vertices_pgr
-            ORDER BY ST_Distance(
-                geom,
-                ST_SetSRID(ST_MakePoint(%s, %s), 4326)
-            )
+            ORDER BY the_geom <-> ST_SetSRID(ST_MakePoint(%s, %s), 4326)
             LIMIT 1;
         """, (lon, lat))
         result = cur.fetchone()
@@ -95,7 +92,7 @@ def run_routing_algorithm(conn, start_node, end_node, use_fail_prob=False):
             )
         ),
         route_geom AS (
-            SELECT r.seq, w.geom, w.cost AS length_m
+            SELECT r.seq, w.geom, w.length_m AS length_m
             FROM route r
             JOIN rr.ways w ON r.edge = w.id
             ORDER BY r.seq

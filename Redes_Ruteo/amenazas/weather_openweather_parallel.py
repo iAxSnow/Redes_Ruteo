@@ -33,10 +33,10 @@ BBOX_N=float(os.getenv("BBOX_N","-33.2"))
 BBOX_E=float(os.getenv("BBOX_E","-70.45"))
 GRID=float(os.getenv("WEATHER_GRID","0.02"))
 PAR=int(os.getenv("WEATHER_PARALLEL","4"))
-RAIN_MM_H=float(os.getenv("RAIN_MM_H","5.0")) # Heavy rain threshold
-WIND_MS=float(os.getenv("WIND_MS","13.9")) # Strong wind (>= 50 km/h)
-VISIBILITY_M=int(os.getenv("VISIBILITY_M","1000")) # Low visibility threshold
-SNOW_MM_H=float(os.getenv("SNOW_MM_H","1.0")) # Snow threshold
+RAIN_MM_H=float(os.getenv("RAIN_MM_H","10.0")) # Heavy rain threshold
+WIND_MS=float(os.getenv("WIND_MS","20.0")) # Strong wind (>= 72 km/h)
+VISIBILITY_M=int(os.getenv("VISIBILITY_M","500")) # Low visibility threshold
+SNOW_MM_H=float(os.getenv("SNOW_MM_H","2.0")) # Snow threshold
 
 # OpenWeather condition codes for fog, mist, haze, etc.
 # See: https://openweathermap.org/weather-conditions

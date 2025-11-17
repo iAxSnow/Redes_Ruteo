@@ -109,8 +109,8 @@ Calcula rutas óptimas entre dos puntos usando diferentes algoritmos.
 **Parámetros de entrada:**
 ```json
 {
-  "start": {"lat": -33.45, "lng": -70.65},
-  "end": {"lat": -33.43, "lng": -70.64},
+  "start": {"lat": -33.6752661, "lng": -70.9436214},
+  "end": {"lat": -33.6740227, "lng": -70.9440099},
   "algorithm": "all"
 }
 ```

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Loader de hidrantes SISS (dedupe) con saneamiento de NaN en props JSON.
-Entrada: metadata/hydrants_siss.geojson
+Loader de hidrantes OSM.
+Entrada: metadata/hydrants.geojson
 Tabla: rr.metadata_hydrants(ext_id PK, status text, provider text, props jsonb, geom Point)
 """
 import os, json, math
@@ -20,7 +20,7 @@ PGUSER = os.getenv("PGUSER","postgres")
 PGPASSWORD = os.getenv("PGPASSWORD","postgres")
 
 ROOT = Path(__file__).resolve().parents[1]
-GJ_PATH = ROOT / "metadata" / "hydrants_siss.geojson"
+GJ_PATH = ROOT / "metadata" / "hydrants.geojson"
 
 def is_nan(v):
     try:
@@ -46,36 +46,32 @@ def main():
     best = {}
     for f in feats:
         p = f.get("properties") or {}
-        ext = p.get("ext_id") or p.get("id")
+        ext = f.get("id") or p.get("osm_id")
         if not ext:
-            g=f.get("geometry") or {}
-            if g.get("type")=="Point":
-                c=g.get("coordinates") or []
-                if len(c)==2:
-                    ext=f"pt:{c[0]:.6f},{c[1]:.6f}"
+            g = f.get("geometry") or {}
+            if g.get("type") == "Point":
+                c = g.get("coordinates") or []
+                if len(c) == 2:
+                    ext = f"pt:{c[0]:.6f},{c[1]:.6f}"
         if not ext: continue
         cur = best.get(ext)
         def score(pp):
-            s=0
-            estado = pp.get("ESTADO_USO")
-            if estado == 1:
-                s+=2
-            elif estado == 0:
-                s+=1
-            if pp.get("provider"): s+=1
+            s = 0
+            # OSM hidrants are assumed functional unless specified
+            s += 1
+            if pp.get("provider"): s += 1
             return s
         if (cur is None) or (score(p) > score((cur.get("properties") or {}))):
-            best[ext]=f
+            best[ext] = f
 
-    rows=[]
-    for ext,f in best.items():
-        p=clean(f.get("properties") or {})
-        estado = p.get("ESTADO_USO")
-        status = "vigente" if estado == 1 else "no_vigente"
-        g=f.get("geometry")
-        rows.append((ext, status, p.get("provider") or "SISS", Json(p, dumps=lambda x: json.dumps(x, ensure_ascii=False, allow_nan=False)), json.dumps(g)))
+    rows = []
+    for ext, f in best.items():
+        p = clean(f.get("properties") or {})
+        status = "vigente"  # Assume OSM hydrants are functional
+        g = f.get("geometry")
+        rows.append((ext, status, "OSM", Json(p, dumps=lambda x: json.dumps(x, ensure_ascii=False, allow_nan=False)), json.dumps(g)))
 
-    print(f"[L] hidrantes únicos: {len(rows)} (de {len(feats)})")
+    print(f"[L] hidrantes únicos OSM: {len(rows)} (de {len(feats)})")
 
     with psycopg2.connect(host=PGHOST, port=PGPORT, dbname=PGDATABASE, user=PGUSER, password=PGPASSWORD) as conn:
         with conn.cursor() as cur:
@@ -91,7 +87,7 @@ def main():
             template="(%s,%s,%s,%s, ST_SetSRID(ST_GeomFromGeoJSON(%s),4326))",
             page_size=1000)
         conn.commit()
-    print("[OK] Hidrantes cargados.")
+    print("[OK] Hidrantes OSM cargados.")
 
 if __name__ == "__main__":
     main()
