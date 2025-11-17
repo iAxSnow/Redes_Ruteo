@@ -345,6 +345,7 @@ def api_calculate_route():
         end = data['end']
         algorithm = data.get('algorithm', 'dijkstra_dist')
         simulate_failures = data.get('simulate_failures', False)
+        constraints = data.get('constraints', {})
         
         if 'lat' not in start or 'lng' not in start or 'lat' not in end or 'lng' not in end:
             return jsonify({
@@ -362,7 +363,7 @@ def api_calculate_route():
         end_lat = float(end['lat'])
         end_lng = float(end['lng'])
         
-        print(f"Received coordinates: start=({start_lat}, {start_lng}), end=({end_lat}, {end_lng}))
+        print(f"Received coordinates: start=({start_lat}, {start_lng}), end=({end_lat}, {end_lng})")
         
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -607,29 +608,83 @@ def api_calculate_route():
         if algorithm == 'all' or algorithm == 'cplex':
             try:
                 start_time = time.time()
+
                 if simulate_failures:
-                    # Use dynamic threat-based routing
-                    sql_for_pgr = f"""
-                        SELECT id, source, target, length_m * (1 + COALESCE(fail_prob, 0) * 5) as cost
-                        FROM ({base_routing_query}) subq
-                        WHERE length_m * (1 + COALESCE(fail_prob, 0) * 5) > 0
-                    """
+                    # Use dynamic threat-based routing with constraints
+                    base_query = base_routing_query
+                    cost_expr = "length_m * (1 + COALESCE(fail_prob, 0) * 5)"
+                    risk_condition = "COALESCE(fail_prob, 0) <= 0.5"
                 else:
-                    # Use pre-calculated cost_combined
-                    sql_for_pgr = "SELECT id, source, target, cost_combined as cost FROM rr.ways WHERE cost_combined > 0"
+                    # Use pre-calculated values
+                    base_query = "SELECT id, source, target, cost_combined as cost, fail_prob, width_m, highway FROM rr.ways"
+                    cost_expr = "cost_combined"
+                    risk_condition = "COALESCE(fail_prob, 0) <= 0.5"
+
+                # Build WHERE clause for platform constraints
+                where_conditions = [f"{cost_expr} > 0", risk_condition]
+
+                if constraints.get('maxWidth'):
+                    where_conditions.append(f"COALESCE(width_m, 999) <= {constraints['maxWidth']}")
+                if constraints.get('maxHeight'):
+                    # For height, we don't have direct data, but we can use a proxy
+                    where_conditions.append("COALESCE(width_m, 999) <= 4.5")  # Rough proxy for height
+                if constraints.get('maxWeight'):
+                    # Weight constraints would need bridge/load data - for now, use a proxy
+                    where_conditions.append("highway NOT IN ('footway', 'cycleway')")  # Avoid pedestrian paths
+
+                where_clause = " AND ".join(where_conditions)
+
+                # For CPLEX approximation: find path with minimal cost among edges meeting all constraints
+                sql_for_pgr = f"""
+                    SELECT id, source, target, {cost_expr} as cost
+                    FROM ({base_query}) subq
+                    WHERE {where_clause}
+                """
                 route_query = "SELECT seq, path_seq, node, edge, cost, agg_cost FROM pgr_dijkstra(%s, %s, %s, directed := false)"
                 params = (sql_for_pgr, source_node, target_node)
-                
+
                 geojson = build_route_geojson(cur, route_query, params)
                 compute_time_ms = (time.time() - start_time) * 1000
-                
-                results['cplex'] = {
-                    "route_geojson": geojson or {"type": "Feature", "properties": {"total_length_m": 0, "total_cost": 0}, "geometry": {"type": "LineString", "coordinates": []}},
-                    "compute_time_ms": round(compute_time_ms, 2),
-                    "algorithm": "CPLEX" + (" con Amenazas" if simulate_failures else "")
-                }
-            except Exception as e:
-                app.logger.error(f"Error calculating cplex route: {str(e)}")
+
+                # Check if route has actual coordinates (not empty)
+                has_valid_route = (geojson and geojson.get('geometry', {}).get('coordinates') and
+                                 len(geojson['geometry']['coordinates']) > 0)
+
+                if has_valid_route:
+                    constraint_desc = []
+                    if constraints.get('maxWidth'): constraint_desc.append(f"Ancho ≤ {constraints['maxWidth']}m")
+                    if constraints.get('maxHeight'): constraint_desc.append(f"Altura ≤ {constraints['maxHeight']}m")
+                    if constraints.get('maxWeight'): constraint_desc.append(f"Peso ≤ {constraints['maxWeight']}t")
+                    constraint_text = f" ({', '.join(constraint_desc)})" if constraint_desc else ""
+
+                    results['cplex'] = {
+                        "route_geojson": geojson,
+                        "compute_time_ms": round(compute_time_ms, 2),
+                        "algorithm": f"CPLEX (Optimizado con Riesgo ≤ 0.5{constraint_text})" + (" con Amenazas" if simulate_failures else "")
+                    }
+                else:
+                    # Fallback: use the weighted dijkstra with constraints
+                    if simulate_failures:
+                        sql_for_pgr = f"""
+                            SELECT id, source, target, length_m * (1 + COALESCE(fail_prob, 0) * 5) as cost
+                            FROM ({base_routing_query}) subq
+                            WHERE length_m * (1 + COALESCE(fail_prob, 0) * 5) > 0
+                        """
+                    else:
+                        sql_for_pgr = f"""
+                            SELECT id, source, target, cost_combined as cost
+                            FROM rr.ways
+                            WHERE cost_combined > 0
+                        """
+                    route_query = "SELECT seq, path_seq, node, edge, cost, agg_cost FROM pgr_dijkstra(%s, %s, %s, directed := false)"
+                    params = (sql_for_pgr, source_node, target_node)
+                    geojson = build_route_geojson(cur, route_query, params)
+                    if geojson and geojson.get('geometry', {}).get('coordinates') and len(geojson['geometry']['coordinates']) > 0:
+                        results['cplex'] = {
+                            "route_geojson": geojson,
+                            "compute_time_ms": round(compute_time_ms, 2),
+                            "algorithm": "CPLEX (Fallback: Ponderado)" + (" con Amenazas" if simulate_failures else "")
+                        }
             except Exception as e:
                 app.logger.error(f"Error calculating cplex route: {str(e)}")
         
