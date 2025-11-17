@@ -1,0 +1,359 @@
+# PRESENTACIÓN: SISTEMA DE RUTEO RESILIENTE PARA BOMBEROS
+# Proyecto Redes_Ruteo - Universidad/Facultad
+
+## 1. INTRODUCCIÓN AL PROYECTO
+
+### ¿Qué es Redes_Ruteo?
+Redes_Ruteo es un sistema de ruteo inteligente diseñado específicamente para vehículos de emergencia (bomberos) en la Región Metropolitana de Chile. El sistema integra datos geográficos de OpenStreetMap con información de amenazas dinámicas para calcular rutas óptimas que minimizan riesgos y tiempos de respuesta.
+
+### Arquitectura General
+- **Frontend**: Interfaz web con Leaflet.js para visualización de mapas
+- **Backend**: API REST con Flask y PostgreSQL/PostGIS
+- **Base de datos**: PostgreSQL con extensión PostGIS y pgRouting
+- **Datos**: Infraestructura OSM + metadata + amenazas dinámicas
+
+---
+
+## 2. BASE DE DATOS Y TOPOLOGÍA
+
+### 2.1 Estructura de la Base de Datos
+
+#### Tablas Principales:
+- **rr.ways**: Vías de la red de carreteras
+  - id: Identificador único de la vía
+  - source/target: Nodos de inicio/fin de la vía
+  - geom: Geometría LineString de la vía
+  - length_m: Longitud en metros
+  - highway: Tipo de vía (motorway, primary, secondary, etc.)
+  - oneway: Dirección de circulación
+  - lanes: Número de carriles
+  - width_m: Ancho de la vía en metros
+  - cost_combined: Costo ponderado precalculado
+
+- **rr.ways_vertices_pgr**: Nodos de la red
+  - id: Identificador único del nodo
+  - the_geom: Punto geográfico (latitud, longitud)
+  - Componente conectado al que pertenece
+
+- **rr.amenazas_waze**: Incidentes de tráfico (Waze)
+- **rr.amenazas_clima**: Amenazas climáticas (OpenWeather)
+- **rr.amenazas_calming**: Reductores de velocidad (OSM)
+
+### 2.2 Creación de la Topología
+
+#### Proceso ETL (Extract, Transform, Load):
+
+1. **Infraestructura OSM**:
+   ```bash
+   # Extraer datos de OpenStreetMap
+   python infraestructura/osm_roads_overpass_parallel.py
+   # Resultado: ways.geojson, nodes.geojson
+
+   # Cargar en base de datos
+   python loaders/load_ways_nodes.py
+   ```
+
+2. **Metadata**:
+   - **Anchos de vías**: `metadata/road_widths_osm_parallel.py`
+   - **Sentidos de circulación**: `metadata/road_oneway_osm_parallel.py`
+   - **Hidrantes**: `metadata/hydrants_siss_parse.py`
+
+3. **Amenazas**:
+   - **Waze**: `amenazas/waze_incidents_parallel_adaptive.py`
+   - **Clima**: `amenazas/weather_openweather_parallel.py`
+   - **Traffic Calming**: `amenazas/traffic_calming_as_threats_parallel.py`
+
+#### Topología de Red:
+- **pgRouting** crea automáticamente la topología
+- Cada vía se convierte en un edge con source/target nodes
+- Los componentes conectados se identifican automáticamente
+- Solo se usa el componente más grande (component = 1)
+
+---
+
+## 3. ALGORITMOS DE RUTEO
+
+### 3.1 Algoritmos Implementados
+
+#### 1. Dijkstra (Distancia)
+- **Propósito**: Ruta más corta por distancia
+- **Costo**: Longitud de la vía en metros (`length_m`)
+- **Uso**: Ruta base de referencia
+- **Fórmula**: `cost = length_m`
+
+#### 2. Dijkstra (Ponderado)
+- **Propósito**: Ruta que minimiza riesgo + distancia
+- **Costo**: Distancia ponderada por probabilidad de falla
+- **Fórmula**: `cost_combined = length_m * (1 + fail_prob * 5)`
+- **Factor de ponderación**: 5x (configurable)
+
+#### 3. A* (Ponderado)
+- **Propósito**: Dijkstra ponderado con heurística euclidiana
+- **Ventaja**: Más eficiente para rutas largas
+- **Misma fórmula de costo que Dijkstra ponderado**
+- **Heurística**: Distancia euclidiana al destino
+
+#### 4. CPLEX (Optimización)
+- **Propósito**: Ruteo con restricciones de plataforma
+- **Características**:
+  - Minimiza costo ponderado
+  - Respeta restricciones físicas del vehículo
+  - Fallback automático si restricciones son muy estrictas
+
+### 3.2 Sistema de Pesos y Probabilidades
+
+#### Probabilidades de Falla (fail_prob):
+Cada vía tiene una probabilidad de falla calculada dinámicamente:
+
+1. **Amenazas Waze**:
+   - CLOSURE: 70% de probabilidad
+   - TRAFFIC_JAM: 20% de probabilidad
+
+2. **Amenazas Climáticas**:
+   - HEAVY_RAIN: 5% + (severidad × 5%)
+   - STRONG_WIND: 4% + (severidad × 5%)
+   - LOW_VISIBILITY: 8% + (severidad × 5%)
+   - SNOW: 10% + (severidad × 5%)
+
+3. **Traffic Calming**:
+   - Reductores de velocidad: 0.5% de probabilidad
+
+#### Cálculo de Costo Combinado:
+```
+cost_combined = length_m × (1 + fail_prob × factor)
+```
+
+- **length_m**: Distancia real de la vía
+- **fail_prob**: Probabilidad de falla (0.0 a 1.0)
+- **factor**: Factor de ponderación (actualmente 5)
+
+### 3.3 Modos de Funcionamiento
+
+#### Sin Simular Fallas:
+- Usa `cost_combined` precalculado de la base de datos
+- Probabilidades basadas en datos históricos
+- Más rápido, menos preciso
+
+#### Con Simular Fallas:
+- Calcula probabilidades en tiempo real
+- Usa datos actuales de amenazas
+- Más lento, más preciso
+- Consulta dinámica a tablas de amenazas
+
+---
+
+## 4. RESTRICCIONES DEL SISTEMA
+
+### 4.1 Restricciones de Plataforma
+
+#### Ancho Máximo (maxWidth):
+- **Propósito**: Evitar vías demasiado estrechas
+- **Unidad**: Metros
+- **Proxy usado**: `width_m` de OSM
+- **Ejemplo**: maxWidth = 2.5m → evita vías < 2.5m
+
+#### Altura Máxima (maxHeight):
+- **Propósito**: Evitar puentes/túneles bajos
+- **Unidad**: Metros
+- **Proxy usado**: Estimación basada en ancho
+- **Lógica**: maxHeight ≤ 4.5m (proxy por ancho)
+
+#### Peso Máximo (maxWeight):
+- **Propósito**: Evitar estructuras con límite de peso
+- **Unidad**: Toneladas
+- **Proxy usado**: Exclusión de vías peatonales
+- **Lógica**: Evita `highway IN ('footway', 'cycleway')`
+
+### 4.2 Restricciones Técnicas
+
+#### Riesgo Máximo:
+- **CPLEX**: fail_prob ≤ 0.5 (50%)
+- **Propósito**: Evitar rutas con riesgo inaceptable
+
+#### Conectividad:
+- Solo rutas en el componente conectado más grande
+- Vías deben tener `cost_combined > 0`
+- Nodos deben estar dentro de la red
+
+### 4.3 Lógica de Direcciones
+
+#### Vías Bidireccionales:
+- `oneway` es NULL o vacío → circulación en ambos sentidos
+- Costo normal en ambas direcciones
+
+#### Vías Unidireccionales:
+- `oneway = 'yes'` → solo dirección forward
+- `oneway = '-1'` → solo dirección reverse
+- Costo = -1 en dirección prohibida (pgRouting)
+
+---
+
+## 5. FLUJO DE CÁLCULO DE RUTAS
+
+### 5.1 Proceso Paso a Paso
+
+1. **Recepción de Coordenadas**:
+   - Latitud/longitud de inicio y fin
+   - Validación de coordenadas
+
+2. **Búsqueda de Nodos Más Cercanos**:
+   ```sql
+   SELECT v.id, ST_X(v.the_geom) as x, ST_Y(v.the_geom) as y
+   FROM rr.ways_vertices_pgr v
+   JOIN rr.components c ON v.id = c.node
+   WHERE c.component = 1
+   ORDER BY v.the_geom <-> ST_SetSRID(ST_MakePoint(lng, lat), 4326)
+   LIMIT 1
+   ```
+
+3. **Selección de Consulta SQL**:
+   - Según algoritmo y modo (con/sin amenazas)
+   - Construcción dinámica de WHERE clauses para restricciones
+
+4. **Ejecución de Algoritmo pgRouting**:
+   ```sql
+   SELECT seq, path_seq, node, edge, cost, agg_cost
+   FROM pgr_dijkstra(sql_query, source_node, target_node, directed := false)
+   ```
+
+5. **Construcción de GeoJSON**:
+   - Unión de geometrías de vías
+   - Cálculo de estadísticas (longitud total, costo total)
+
+### 5.2 Formatos de Salida
+
+#### GeoJSON de Ruta:
+```json
+{
+  "type": "Feature",
+  "properties": {
+    "total_length_m": 1250.45,
+    "total_cost": 1875.67
+  },
+  "geometry": {
+    "type": "LineString",
+    "coordinates": [[lng1, lat1], [lng2, lat2], ...]
+  }
+}
+```
+
+#### Respuesta API:
+```json
+{
+  "dijkstra_dist": {
+    "route_geojson": {...},
+    "compute_time_ms": 45.2,
+    "algorithm": "Dijkstra (Distancia)"
+  },
+  "dijkstra_prob": {...},
+  "astar_prob": {...},
+  "cplex": {...}
+}
+```
+
+---
+
+## 6. CONFIGURACIÓN Y DESPLIEGUE
+
+### 6.1 Variables de Entorno (.env)
+```
+PGHOST=localhost
+PGPORT=5432
+PGDATABASE=rr
+PGUSER=postgres
+PGPASSWORD=postgres
+OPENWEATHER_API_KEY=your_key_here
+```
+
+### 6.2 Despliegue con Docker
+```bash
+# Levantar PostgreSQL con PostGIS y pgRouting
+docker-compose up -d
+
+# Crear base de datos y esquema
+psql -h localhost -U postgres -d rr -f schema.sql
+
+# Ejecutar ETL completo
+./scripts/run_all_etl_parallel.sh
+
+# Iniciar aplicación
+python app.py
+```
+
+### 6.3 Endpoints API
+
+#### GET /api/threats
+- Retorna todas las amenazas en GeoJSON
+- Formato: FeatureCollection
+
+#### POST /api/calculate_route
+- Parámetros:
+  - start: {lat, lng}
+  - end: {lat, lng}
+  - algorithm: "all" | "dijkstra_dist" | "dijkstra_prob" | "astar_prob" | "cplex"
+  - simulate_failures: true/false
+  - constraints: {maxWidth, maxHeight, maxWeight}
+
+#### GET /api/hydrants
+- Retorna hidrantes en GeoJSON
+
+---
+
+## 7. PREGUNTAS FRECUENTES PARA PRESENTACIÓN
+
+### ¿Cómo se diferencia de Google Maps/Waze?
+- **Enfoque específico**: Optimizado para emergencias, no navegación general
+- **Datos propietarios**: Usa datos abiertos (OSM) + datos específicos de Chile
+- **Riesgo integrado**: Considera amenazas dinámicas en el cálculo
+- **Restricciones físicas**: Tiene en cuenta capacidades del vehículo
+
+### ¿Por qué usar pgRouting en lugar de implementar algoritmos propios?
+- **Optimizado**: Implementación C altamente eficiente
+- **Probado**: Usado en producción por gobiernos y empresas
+- **Completo**: Soporta múltiples algoritmos y restricciones
+- **Mantenible**: No reinventar la rueda
+
+### ¿Cómo se actualizan las amenazas?
+- **Waze**: Cada 5-10 minutos (API externa)
+- **Clima**: Cada hora (OpenWeather API)
+- **Traffic Calming**: Datos estáticos de OSM
+
+### ¿Qué pasa si una ruta es imposible?
+- **Fallback automático**: CPLEX usa algoritmo más permisivo
+- **Mensaje de error**: Usuario informado de la imposibilidad
+- **Alternativas**: Sistema sugiere rutas cercanas
+
+### ¿Escalabilidad del sistema?
+- **Base de datos**: Maneja cientos de miles de vías
+- **Tiempo de respuesta**: < 100ms para rutas típicas
+- **Memoria**: Optimizado para no cargar toda la red
+
+---
+
+## 8. LIMITACIONES Y MEJORAS FUTURAS
+
+### Limitaciones Actuales:
+- Restricciones físicas usan proxies (no datos reales de puentes)
+- No considera tráfico en tiempo real (solo incidentes)
+- Cobertura limitada a Región Metropolitana
+- No optimiza múltiples vehículos simultáneamente
+
+### Mejoras Futuras:
+- Integración con GPS de vehículos
+- Optimización multi-vehículo
+- Machine Learning para predicción de riesgos
+- Datos reales de restricciones físicas
+- App móvil para bomberos
+
+---
+
+## 9. CONCLUSIONES
+
+Redes_Ruteo demuestra cómo la integración de datos geográficos abiertos con algoritmos de optimización puede crear sistemas especializados para servicios de emergencia. El enfoque en resiliencia y restricciones específicas del dominio diferencia este proyecto de soluciones genéricas de navegación.
+
+**Puntos clave para enfatizar en presentación:**
+- Integración de múltiples fuentes de datos
+- Algoritmos adaptados a necesidades específicas
+- Enfoque en seguridad y eficiencia para emergencias
+- Arquitectura escalable y mantenible</content>
+<parameter name="filePath">/workspaces/Redes_Ruteo/PRESENTACION_PROYECTO.txt
