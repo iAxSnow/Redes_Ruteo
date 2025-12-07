@@ -21,19 +21,78 @@ DB_NAME = os.getenv("PGDATABASE", "rr")
 DB_USER = os.getenv("PGUSER", "postgres")
 DB_PASS = os.getenv("PGPASSWORD", "postgres")
 
-# --- Parámetros de Amenazas (Ajustados por tipo) ---
-# Se eliminó el radio/probabilidad global.
+# --- Parámetros dinámicos para cálculo de probabilidades ---
+# En lugar de valores fijos, usar fórmulas basadas en factores realistas
 
-# Amenazas Waze (accidentes, cierres)
-WAZE_RADIUS_M = 100  # Radio de influencia grande (en metros)
-WAZE_PROB = 0.7      # Probabilidad/Impacto base alto
+def calculate_dynamic_probability(threat_type, severity, distance_m, size_m=None, duration_factor=1.0):
+    """
+    Calculate failure probability using dynamic formulas based on realistic factors.
+    
+    Args:
+        threat_type: 'waze', 'weather', 'calming'
+        severity: 1-5 scale
+        distance_m: distance from threat to network element
+        size_m: size of threat area (for weather)
+        duration_factor: how long the threat lasts (0-1)
+    
+    Returns:
+        probability: 0-1 scale
+    """
+    # Base probabilities por tipo de amenaza
+    base_probs = {
+        'waze': 0.6,      # Accidentes son comunes
+        'weather': 0.4,   # Clima variable
+        'calming': 0.15   # Reductores de velocidad son locales
+    }
+    
+    base_prob = base_probs.get(threat_type, 0.3)
+    
+    # Factor de severidad: amenazas más severas tienen mayor impacto
+    severity_factor = 0.5 + (severity - 1) * 0.3  # 0.5-1.7
+    
+    # Factor de distancia: amenazas más cercanas tienen mayor impacto
+    if distance_m <= 50:
+        distance_factor = 1.0
+    elif distance_m <= 100:
+        distance_factor = 0.8
+    elif distance_m <= 200:
+        distance_factor = 0.6
+    else:
+        distance_factor = max(0.1, 1.0 - (distance_m / 1000))  # Decae con distancia
+    
+    # Factor de tamaño (para clima): áreas más grandes afectan más
+    size_factor = 1.0
+    if size_m and threat_type == 'weather':
+        size_factor = min(2.0, 1.0 + (size_m / 2000))  # Hasta 2x para áreas grandes
+    
+    # Factor temporal: amenazas que duran más son más problemáticas
+    time_factor = 0.7 + (duration_factor * 0.6)  # 0.7-1.3
+    
+    # Factor aleatorio para variabilidad realista (±15%)
+    import random
+    random_factor = random.uniform(0.85, 1.15)
+    
+    # Cálculo final de probabilidad
+    probability = base_prob * severity_factor * distance_factor * size_factor * time_factor * random_factor
+    
+    # Limitar al rango 0-0.95
+    return min(0.95, max(0.0, probability))
 
-# Amenazas Calming (reductores de velocidad)
-CALMING_RADIUS_M = 15  # Radio de influencia muy localizado (en metros)
-CALMING_PROB = 0.2     # Probabilidad/Impacto bajo (solo reduce velocidad)
 
-# Amenazas Climáticas (se aplica por severidad sobre polígono)
-WEATHER_PROB_FACTOR = 0.5  # Factor para multiplicar por t.severity / 3.0
+def calculate_dynamic_weather_probability(severity, distance_m, size_m, visibility_factor=1.0):
+    """
+    Specialized calculation for weather threats considering visibility and precipitation.
+    """
+    # Clima tiene factores adicionales como visibilidad
+    visibility_impact = 1.0
+    if severity >= 4:  # Baja visibilidad
+        visibility_impact = 1.5  # Mayor impacto
+    
+    precipitation_factor = 1.0 + (size_m / 3000)  # Lluvia más intensa en áreas grandes
+    
+    base_prob = calculate_dynamic_probability('weather', severity, distance_m, size_m, 0.6)
+    
+    return min(0.95, base_prob * visibility_impact * precipitation_factor * visibility_factor)
 
 # Timeout por sentencia (ms) para evitar bloqueos prolongados en consultas pesadas
 STATEMENT_TIMEOUT_MS = int(os.getenv("PG_STATEMENT_TIMEOUT_MS", "120000"))
@@ -323,67 +382,67 @@ def calculate_failure_probabilities(conn):
         print(f"  - Weather: {weather_count}")
         print(f"  - Traffic Calming: {calming_count}")
         
-        # Update ways within influence radius of threats (from all sources)
-        print(f"\nCalculating probabilities for ways...")
+        # Update ways with dynamic probabilities calculated in Python
+        print(f"\nCalculating dynamic probabilities for ways...")
         start_all = time.time()
         
-        # --- Optimización: Calcular todas las probabilidades en una sola consulta ---
-        cur.execute(
-            """
-            WITH all_threats AS (
-                -- Waze threats
-                SELECT 
-                    w.id AS way_id,
-                    %(waze_prob)s AS prob
+        # Reset probabilities first
+        cur.execute("UPDATE rr.ways SET fail_prob = 0.0")
+        
+        # Process Waze threats
+        if waze_count > 0:
+            print("  Processing Waze threats...")
+            cur.execute("""
+                SELECT w.id as way_id, 
+                       ST_Distance(w.geom, t.geom) * 111000 as distance_m,
+                       t.severity, t.size_m
                 FROM rr.ways w
-                JOIN rr.amenazas_waze t ON ST_DWithin(w.geom, t.geom, %(waze_radius_deg)s)
-                WHERE %(waze_count)s > 0
-
-                UNION ALL
-
-                -- Weather threats
-                SELECT 
-                    w.id AS way_id,
-                    (%(weather_prob)s * (t.severity / 3.0)) AS prob
+                JOIN rr.amenazas_waze t ON ST_DWithin(w.geom, t.geom, %(radius_deg)s)
+            """, {'radius_deg': meters_to_degrees(get_influence_radius('waze'))})
+            
+            waze_results = cur.fetchall()
+            for row in waze_results:
+                prob = calculate_dynamic_probability('waze', row['severity'], row['distance_m'], row['size_m'], 0.8)
+                cur.execute("UPDATE rr.ways SET fail_prob = GREATEST(fail_prob, %s) WHERE id = %s", (prob, row['way_id']))
+        
+        # Process Weather threats
+        if weather_count > 0:
+            print("  Processing Weather threats...")
+            cur.execute("""
+                SELECT w.id as way_id, 
+                       ST_Distance(w.geom, ST_Centroid(t.geom)) * 111000 as distance_m,
+                       t.severity, 
+                       ST_Area(t.geom::geography) / 1000000 as area_km2  -- Approximate size
                 FROM rr.ways w
                 JOIN rr.amenazas_clima t ON ST_Intersects(w.geom, t.geom)
-                WHERE %(weather_count)s > 0
-
-                UNION ALL
-
-                -- Traffic Calming threats
-                SELECT 
-                    w.id AS way_id,
-                    %(calming_prob)s AS prob
+            """)
+            
+            weather_results = cur.fetchall()
+            for row in weather_results:
+                # Estimate size from area
+                size_m = (row['area_km2'] * 1000000) ** 0.5  # Square root of area as rough diameter
+                visibility_factor = 1.5 if row['severity'] >= 4 else 1.0  # Higher for low visibility
+                prob = calculate_dynamic_weather_probability(row['severity'], row['distance_m'], size_m, visibility_factor)
+                cur.execute("UPDATE rr.ways SET fail_prob = GREATEST(fail_prob, %s) WHERE id = %s", (prob, row['way_id']))
+        
+        # Process Traffic Calming threats
+        if calming_count > 0:
+            print("  Processing Traffic Calming threats...")
+            cur.execute("""
+                SELECT w.id as way_id, 
+                       ST_Distance(w.geom, t.geom) * 111000 as distance_m,
+                       t.severity, t.size_m
                 FROM rr.ways w
-                JOIN rr.amenazas_calming t ON ST_DWithin(w.geom, t.geom, %(calming_radius_deg)s)
-                WHERE %(calming_count)s > 0
-            ),
-            max_probs AS (
-                SELECT 
-                    way_id,
-                    MAX(prob) as max_prob
-                FROM all_threats
-                GROUP BY way_id
-            )
-            UPDATE rr.ways w
-            SET fail_prob = mp.max_prob
-            FROM max_probs mp
-            WHERE w.id = mp.way_id;
-            """,
-            {
-                'waze_prob': WAZE_PROB,
-                'waze_radius_deg': meters_to_degrees(WAZE_RADIUS_M),
-                'waze_count': waze_count,
-                'weather_prob': WEATHER_PROB_FACTOR,
-                'weather_count': weather_count,
-                'calming_prob': CALMING_PROB,
-                'calming_radius_deg': meters_to_degrees(CALMING_RADIUS_M),
-                'calming_count': calming_count,
-            }
-        )
+                JOIN rr.amenazas_calming t ON ST_DWithin(w.geom, t.geom, %(radius_deg)s)
+            """, {'radius_deg': meters_to_degrees(get_influence_radius('calming'))})
+            
+            calming_results = cur.fetchall()
+            for row in calming_results:
+                prob = calculate_dynamic_probability('calming', row['severity'], row['distance_m'], row['size_m'], 1.0)
+                cur.execute("UPDATE rr.ways SET fail_prob = GREATEST(fail_prob, %s) WHERE id = %s", (prob, row['way_id']))
+        
         ways_affected = cur.rowcount
-        print(f"✓ Updated {ways_affected} ways based on all threats in {time.time()-start_all:.1f}s")
+        print(f"✓ Updated ways with dynamic probabilities in {time.time()-start_all:.1f}s")
 
         # Update vertices within influence radius of threats (if table exists)
         cur.execute("""
