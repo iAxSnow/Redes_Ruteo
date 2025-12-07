@@ -484,6 +484,79 @@
       color: var(--danger-color);
     }
 
+    /* Vehicle Specifications */
+    .vehicle-specs-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+
+    @media (min-width: 480px) {
+      .vehicle-specs-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (min-width: 640px) {
+      .vehicle-specs-grid {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+
+    .spec-input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .spec-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--dark-color);
+    }
+
+    .spec-input {
+      padding: 8px 12px;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      font-size: 13px;
+      color: var(--dark-color);
+      background: white;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .spec-input:focus {
+      outline: none;
+      border-color: var(--primary-color);
+      box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1);
+    }
+
+    .spec-input::placeholder {
+      color: #9ca3af;
+    }
+
+    .spec-note {
+      margin-top: 12px;
+      padding: 8px 12px;
+      background: #fef3c7;
+      border: 1px solid #f59e0b;
+      border-radius: var(--radius);
+      font-size: 11px;
+      color: #92400e;
+      line-height: 1.4;
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+    }
+
+    .spec-note i {
+      color: #d97706;
+      margin-top: 1px;
+    }
+
     /* Legend */
     .legend {
       background: rgba(255, 255, 255, 0.95);
@@ -723,6 +796,41 @@
           <i class="fas fa-exclamation-triangle" style="color: #d97706;"></i>
           Simular fallas dinámicas
         </label>
+      </div>
+
+      <!-- Vehicle Specifications Section -->
+      <div class="control-section">
+        <h3 class="section-title">
+          <i class="fas fa-truck section-icon"></i>
+          Especificaciones del Vehículo
+        </h3>
+        <div class="vehicle-specs-grid">
+          <div class="spec-input-group">
+            <label class="spec-label">
+              <i class="fas fa-arrows-alt-h"></i>
+              Ancho máximo (m)
+            </label>
+            <input type="number" class="spec-input" id="vehicleWidth" placeholder="2.5" min="1" max="5" step="0.1" value="2.5" />
+          </div>
+          <div class="spec-input-group">
+            <label class="spec-label">
+              <i class="fas fa-arrows-alt-v"></i>
+              Altura máxima (m)
+            </label>
+            <input type="number" class="spec-input" id="vehicleHeight" placeholder="4.5" min="2" max="8" step="0.1" value="4.5" />
+          </div>
+          <div class="spec-input-group">
+            <label class="spec-label">
+              <i class="fas fa-weight-hanging"></i>
+              Peso máximo (t)
+            </label>
+            <input type="number" class="spec-input" id="vehicleWeight" placeholder="15" min="1" max="50" step="0.5" value="15" />
+          </div>
+        </div>
+        <div class="spec-note">
+          <i class="fas fa-info-circle"></i>
+          Estas restricciones se aplican principalmente al algoritmo CPLEX para rutas compatibles con tu vehículo.
+        </div>
       </div>
 
       <!-- Calculate Button -->
@@ -1324,6 +1432,16 @@
     updateStatus('🔄 Calculando rutas...', 'loading');
 
     try {
+      // Get vehicle constraints
+      const constraints = {};
+      const vehicleWidth = parseFloat(document.getElementById('vehicleWidth').value);
+      const vehicleHeight = parseFloat(document.getElementById('vehicleHeight').value);
+      const vehicleWeight = parseFloat(document.getElementById('vehicleWeight').value);
+
+      if (!isNaN(vehicleWidth) && vehicleWidth > 0) constraints.maxWidth = vehicleWidth;
+      if (!isNaN(vehicleHeight) && vehicleHeight > 0) constraints.maxHeight = vehicleHeight;
+      if (!isNaN(vehicleWeight) && vehicleWeight > 0) constraints.maxWeight = vehicleWeight;
+
       const response = await fetch('/api/calculate_route', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1331,7 +1449,8 @@
           start: { lat: start.lat, lng: start.lng },
           end: { lat: end.lat, lng: end.lng },
           algorithm: 'all',
-          simulate_failures: simulate_failures
+          simulate_failures: simulate_failures,
+          constraints: constraints
         })
       });
 
@@ -1393,6 +1512,19 @@
       }
 
       updateStatus(`✅ Rutas calculadas: ${statusMessages.join(', ')}`, 'success');
+
+      // Show applied constraints info if any were used
+      if (Object.keys(constraints).length > 0 && algorithms.includes('cplex')) {
+        const constraintInfo = Object.entries(constraints)
+          .map(([key, value]) => {
+            const labels = { maxWidth: 'Ancho', maxHeight: 'Altura', maxWeight: 'Peso' };
+            const units = { maxWidth: 'm', maxHeight: 'm', maxWeight: 't' };
+            return `${labels[key]}: ≤${value}${units[key]}`;
+          })
+          .join(', ');
+        updateStatus(`ℹ️ Restricciones aplicadas: ${constraintInfo}`, 'info');
+        setTimeout(() => updateStatus(`✅ Rutas calculadas: ${statusMessages.join(', ')}`, 'success'), 3000);
+      }
     } catch (error) {
       updateStatus('❌ Error al calcular las rutas', 'error');
       console.error(error);
