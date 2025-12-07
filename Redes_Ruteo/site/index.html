@@ -3,67 +3,796 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Ruteo Resiliente — Visualización</title>
+  <title>🚒 Ruteo Resiliente — Sistema de Emergencias</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    html, body, #map { height: 100%; margin: 0; }
-    .legend { background: white; padding: 6px 8px; border-radius: 4px; font: 12px/14px Arial; }
-    .legend .title { font-weight: bold; margin-bottom: 6px; }
-    #controls { position: absolute; top: 10px; right: 10px; z-index: 1000; background: white; padding: 10px; border-radius: 4px; }
+    :root {
+      --primary-color: #dc2626;
+      --secondary-color: #1e40af;
+      --success-color: #059669;
+      --warning-color: #d97706;
+      --danger-color: #dc2626;
+      --dark-color: #1f2937;
+      --light-color: #f9fafb;
+      --border-color: #e5e7eb;
+      --shadow: 0 10px 25px rgba(0,0,0,0.1);
+      --shadow-lg: 0 20px 40px rgba(0,0,0,0.15);
+      --radius: 12px;
+      --radius-lg: 16px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      overflow: hidden;
+    }
+
+    #map {
+      height: 100vh;
+      position: relative;
+    }
+
+    /* Header */
+    .app-header {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 1001;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+      padding: 12px 20px;
+      box-shadow: var(--shadow);
+    }
+
+    .header-content {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .logo-section {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-icon {
+      font-size: 28px;
+      color: var(--primary-color);
+    }
+
+    .logo-text {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--dark-color);
+      margin: 0;
+    }
+
+    .logo-subtitle {
+      font-size: 12px;
+      color: #6b7280;
+      font-weight: 500;
+      margin: 0;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn-header {
+      background: var(--primary-color);
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: var(--radius);
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-header:hover {
+      background: #b91c1c;
+      transform: translateY(-1px);
+      box-shadow: var(--shadow);
+    }
+
+    /* Control Panel */
+    .control-panel {
+      position: absolute;
+      top: 80px;
+      right: 20px;
+      width: 320px;
+      max-height: calc(100vh - 100px);
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-lg);
+      z-index: 1000;
+      overflow: hidden;
+      transition: all 0.3s ease;
+    }
+
+    .control-panel.collapsed {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+
+    .control-panel.collapsed .panel-content {
+      display: none;
+    }
+
+    .control-panel.collapsed::before {
+      content: "⚙️";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 24px;
+    }
+
+    .panel-header {
+      background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+      color: white;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .panel-title {
+      font-size: 16px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .panel-toggle {
+      background: none;
+      border: none;
+      color: white;
+      cursor: pointer;
+      font-size: 18px;
+      padding: 4px;
+      border-radius: 4px;
+      transition: background 0.2s ease;
+    }
+
+    .panel-toggle:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .panel-content {
+      padding: 20px;
+      max-height: calc(100vh - 140px);
+      overflow-y: auto;
+    }
+
+    /* Section Styles */
+    .control-section {
+      margin-bottom: 24px;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--dark-color);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .section-icon {
+      color: var(--primary-color);
+    }
+
+    /* Location Controls */
+    .location-controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .location-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: #4b5563;
+    }
+
+    /* Buttons */
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary-color), #b91c1c);
+      color: white;
+      border: none;
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow);
+    }
+
+    .btn-primary:active {
+      transform: translateY(0);
+    }
+
+    .btn-secondary {
+      background: var(--light-color);
+      color: var(--dark-color);
+      border: 1px solid var(--border-color);
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .btn-secondary:hover {
+      background: #f3f4f6;
+      border-color: #d1d5db;
+    }
+
+    /* Algorithm Selection */
+    .algorithm-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+
+    .algorithm-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      background: white;
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+
+    .algorithm-option:hover {
+      border-color: var(--primary-color);
+      background: #fef2f2;
+    }
+
+    .algorithm-option.selected {
+      border-color: var(--primary-color);
+      background: linear-gradient(135deg, #fef2f2, #fee2e2);
+    }
+
+    .algorithm-checkbox {
+      display: none;
+    }
+
+    .algorithm-label {
+      flex: 1;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--dark-color);
+      cursor: pointer;
+    }
+
+    .algorithm-desc {
+      font-size: 11px;
+      color: #6b7280;
+      margin-top: 2px;
+    }
+
+    /* Layer Controls */
+    .layer-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+    }
+
+    .layer-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      background: white;
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+
+    .layer-option:hover {
+      border-color: var(--secondary-color);
+      background: #eff6ff;
+    }
+
+    .layer-option.active {
+      border-color: var(--secondary-color);
+      background: linear-gradient(135deg, #eff6ff, #dbeafe);
+    }
+
+    .layer-checkbox {
+      display: none;
+    }
+
+    .layer-label {
+      flex: 1;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--dark-color);
+      cursor: pointer;
+    }
+
+    .layer-icon {
+      width: 16px;
+      height: 16px;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+    }
+
+    /* Status */
+    .status-section {
+      margin-top: 16px;
+      padding: 12px;
+      background: var(--light-color);
+      border-radius: var(--radius);
+      border: 1px solid var(--border-color);
+    }
+
+    .status-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--dark-color);
+      margin-bottom: 8px;
+    }
+
+    .status-message {
+      font-size: 12px;
+      color: #6b7280;
+      line-height: 1.4;
+    }
+
+    .status-loading {
+      color: var(--warning-color);
+    }
+
+    .status-success {
+      color: var(--success-color);
+    }
+
+    .status-error {
+      color: var(--danger-color);
+    }
+
+    /* Legend */
+    .legend {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      font: 12px/14px 'Inter', sans-serif;
+      box-shadow: var(--shadow);
+      max-width: 200px;
+    }
+
+    .legend .title {
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: var(--dark-color);
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 4px;
+      font-size: 11px;
+    }
+
+    .legend-color {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+    }
+
+    /* Animations */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .fade-in {
+      animation: fadeIn 0.3s ease-out;
+    }
+
+    .pulse {
+      animation: pulse 2s infinite;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .control-panel {
+        width: calc(100vw - 40px);
+        right: 20px;
+        left: 20px;
+        max-height: calc(100vh - 120px);
+      }
+
+      .control-panel.collapsed {
+        right: 20px;
+        left: auto;
+      }
+
+      .header-content {
+        padding: 0 10px;
+      }
+
+      .logo-text {
+        font-size: 16px;
+      }
+    }
+
+    /* Loading overlay */
+    .loading-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+
+    .loading-content {
+      background: white;
+      padding: 24px;
+      border-radius: var(--radius-lg);
+      text-align: center;
+      box-shadow: var(--shadow-lg);
+    }
+
+    .loading-spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid #f3f4f6;
+      border-top: 4px solid var(--primary-color);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 16px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
   </style>
 </head>
 <body>
-<div id="map"></div>
-<div id="controls">
-  <h4>Ruteo</h4>
-  <div>
-    <input type="checkbox" id="useLocation" /> Usar ubicación actual como inicio
+  <!-- Header -->
+  <header class="app-header">
+    <div class="header-content">
+      <div class="logo-section">
+        <div class="logo-icon">🚒</div>
+        <div>
+          <h1 class="logo-text">Ruteo Resiliente</h1>
+          <p class="logo-subtitle">Sistema de Emergencias</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="btn-header" id="togglePanel">
+          <i class="fas fa-cog"></i>
+          Controles
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Map Container -->
+  <div id="map"></div>
+
+  <!-- Control Panel -->
+  <div class="control-panel" id="controlPanel">
+    <div class="panel-header">
+      <div class="panel-title">
+        <i class="fas fa-route"></i>
+        Panel de Control
+      </div>
+      <button class="panel-toggle" id="panelToggle">
+        <i class="fas fa-chevron-right"></i>
+      </button>
+    </div>
+    <div class="panel-content">
+      <!-- Location Section -->
+      <div class="control-section">
+        <h3 class="section-title">
+          <i class="fas fa-map-marker-alt section-icon"></i>
+          Ubicación
+        </h3>
+        <div class="location-controls">
+          <button class="btn-secondary" id="setStart">
+            <i class="fas fa-play"></i>
+            Inicio
+          </button>
+          <button class="btn-secondary" id="setEnd">
+            <i class="fas fa-flag-checkered"></i>
+            Fin
+          </button>
+        </div>
+        <label class="location-checkbox">
+          <input type="checkbox" id="useLocation" />
+          <i class="fas fa-crosshairs"></i>
+          Usar mi ubicación
+        </label>
+      </div>
+
+      <!-- Algorithms Section -->
+      <div class="control-section">
+        <h3 class="section-title">
+          <i class="fas fa-brain section-icon"></i>
+          Algoritmos
+        </h3>
+        <div class="algorithm-grid">
+          <div class="algorithm-option" data-algorithm="dijkstra_dist">
+            <input type="checkbox" class="algorithm-checkbox" id="dijkstra_dist" checked />
+            <div>
+              <div class="algorithm-label">Dijkstra (Distancia)</div>
+              <div class="algorithm-desc">Ruta más corta por distancia</div>
+            </div>
+          </div>
+          <div class="algorithm-option" data-algorithm="dijkstra_prob">
+            <input type="checkbox" class="algorithm-checkbox" id="dijkstra_prob" />
+            <div>
+              <div class="algorithm-label">Dijkstra (Ponderado)</div>
+              <div class="algorithm-desc">Considera riesgos dinámicos</div>
+            </div>
+          </div>
+          <div class="algorithm-option" data-algorithm="astar_prob">
+            <input type="checkbox" class="algorithm-checkbox" id="astar_prob" />
+            <div>
+              <div class="algorithm-label">A* (Ponderado)</div>
+              <div class="algorithm-desc">Más eficiente con heurística</div>
+            </div>
+          </div>
+          <div class="algorithm-option" data-algorithm="cplex">
+            <input type="checkbox" class="algorithm-checkbox" id="cplex" />
+            <div>
+              <div class="algorithm-label">CPLEX (Optimización)</div>
+              <div class="algorithm-desc">Máxima optimización con restricciones</div>
+            </div>
+          </div>
+        </div>
+        <label style="display: block; margin-top: 12px; font-size: 13px; color: #4b5563;">
+          <input type="checkbox" id="simulate_failures" style="margin-right: 6px;" />
+          <i class="fas fa-exclamation-triangle" style="color: #d97706;"></i>
+          Simular fallas dinámicas
+        </label>
+      </div>
+
+      <!-- Calculate Button -->
+      <div class="control-section">
+        <button class="btn-primary" id="calculate">
+          <i class="fas fa-route"></i>
+          Calcular Ruta
+        </button>
+      </div>
+
+      <!-- Layers Section -->
+      <div class="control-section">
+        <h3 class="section-title">
+          <i class="fas fa-layer-group section-icon"></i>
+          Capas de Información
+        </h3>
+        <div class="layer-grid">
+          <div class="layer-option" data-layer="waze">
+            <input type="checkbox" class="layer-checkbox" id="showWaze" checked />
+            <div class="layer-icon" style="background: #dc2626; color: white;">🚗</div>
+            <div class="layer-label">Incidentes Waze</div>
+          </div>
+          <div class="layer-option" data-layer="weather">
+            <input type="checkbox" class="layer-checkbox" id="showWeather" />
+            <div class="layer-icon" style="background: #059669; color: white;">🌦️</div>
+            <div class="layer-label">Amenazas Clima</div>
+          </div>
+          <div class="layer-option" data-layer="calming">
+            <input type="checkbox" class="layer-checkbox" id="showCalming" />
+            <div class="layer-icon" style="background: #7c3aed; color: white;">🛑</div>
+            <div class="layer-label">Traffic Calming</div>
+          </div>
+          <div class="layer-option" data-layer="hydrants">
+            <input type="checkbox" class="layer-checkbox" id="showHydrants" />
+            <div class="layer-icon" style="background: #dc2626; color: white;">💧</div>
+            <div class="layer-label">Hidrantes</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Status Section -->
+      <div class="status-section">
+        <div class="status-title">Estado del Sistema</div>
+        <div id="status" class="status-message">Listo para calcular rutas</div>
+      </div>
+    </div>
   </div>
-  <button id="setStart">Establecer Inicio</button>
-  <button id="setEnd">Establecer Fin</button>
-  <h5>Algoritmos</h5>
-  <div>
-    <input type="checkbox" id="dijkstra_dist" checked /> Dijkstra (Distancia)<br>
-    <input type="checkbox" id="dijkstra_prob" /> Dijkstra (Ponderado)<br>
-    <input type="checkbox" id="astar_prob" /> A* (Ponderado)<br>
-    <input type="checkbox" id="cplex" /> CPLEX (Optimización)
+
+  <!-- Loading Overlay -->
+  <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+    <div class="loading-content">
+      <div class="loading-spinner"></div>
+      <div style="font-weight: 600; color: var(--dark-color);">Calculando ruta...</div>
+      <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">Esto puede tomar unos segundos</div>
+    </div>
   </div>
-  <div>
-    <input type="checkbox" id="simulate_failures" /> Simular fallas
-  </div>
-  <button id="calculate">Calcular Ruta</button>
-  <h5>Capas</h5>
-  <div>
-    <input type="checkbox" id="showWaze" checked /> Waze Incidentes<br>
-    <input type="checkbox" id="showWeather" /> Amenazas Clima<br>
-    <input type="checkbox" id="showCalming" /> Amenazas Calming<br>
-    <input type="checkbox" id="showHydrants" /> Hidrantes
-  </div>
-  <div id="status"></div>
-</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
-  // Mapa base centrado en Santiago RM
+  // ===== Initialize Map =====
   const map = L.map('map').setView([-33.45, -70.65], 12);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors'
   }).addTo(map);
 
-  // Capas overlays para el control de capas
+  // ===== UI State Management =====
+  let isPanelCollapsed = false;
+  let startMarker = null;
+  let endMarker = null;
+  let routeLayers = {};
+  let settingStart = false;
+  let settingEnd = false;
   const overlays = {};
 
-  // ===== Hydrants layer =====
+  // ===== Panel Toggle Functionality =====
+  const controlPanel = document.getElementById('controlPanel');
+  const panelToggle = document.getElementById('panelToggle');
+  const togglePanelBtn = document.getElementById('togglePanel');
+
+  function togglePanel() {
+    isPanelCollapsed = !isPanelCollapsed;
+    controlPanel.classList.toggle('collapsed', isPanelCollapsed);
+
+    const icon = panelToggle.querySelector('i');
+    if (isPanelCollapsed) {
+      icon.className = 'fas fa-chevron-left';
+    } else {
+      icon.className = 'fas fa-chevron-right';
+    }
+  }
+
+  panelToggle.addEventListener('click', togglePanel);
+  togglePanelBtn.addEventListener('click', () => {
+    if (isPanelCollapsed) {
+      togglePanel();
+    }
+  });
+
+  // ===== Algorithm Selection =====
+  const algorithmOptions = document.querySelectorAll('.algorithm-option');
+
+  algorithmOptions.forEach(option => {
+    const checkbox = option.querySelector('.algorithm-checkbox');
+    const label = option.querySelector('.algorithm-label');
+
+    option.addEventListener('click', () => {
+      checkbox.checked = !checkbox.checked;
+      updateAlgorithmSelection();
+    });
+
+    label.addEventListener('click', () => {
+      checkbox.checked = !checkbox.checked;
+      updateAlgorithmSelection();
+    });
+  });
+
+  function updateAlgorithmSelection() {
+    algorithmOptions.forEach(option => {
+      const checkbox = option.querySelector('.algorithm-checkbox');
+      option.classList.toggle('selected', checkbox.checked);
+    });
+  }
+
+  // ===== Layer Selection =====
+  const layerOptions = document.querySelectorAll('.layer-option');
+
+  layerOptions.forEach(option => {
+    const checkbox = option.querySelector('.layer-checkbox');
+    const label = option.querySelector('.layer-label');
+
+    option.addEventListener('click', () => {
+      checkbox.checked = !checkbox.checked;
+      updateLayerSelection();
+      toggleLayer(checkbox.id, checkbox.checked);
+    });
+
+    label.addEventListener('click', () => {
+      checkbox.checked = !checkbox.checked;
+      updateLayerSelection();
+      toggleLayer(checkbox.id, checkbox.checked);
+    });
+  });
+
+  function updateLayerSelection() {
+    layerOptions.forEach(option => {
+      const checkbox = option.querySelector('.layer-checkbox');
+      option.classList.toggle('active', checkbox.checked);
+    });
+  }
+
+  function toggleLayer(layerId, isVisible) {
+    const layerNames = {
+      'showWaze': 'Waze — Incidentes/Cierres',
+      'showWeather': 'Amenazas Clima',
+      'showCalming': 'Amenazas Calming',
+      'showHydrants': 'Hidrantes'
+    };
+
+    const layerName = layerNames[layerId];
+    if (layerName && overlays[layerName]) {
+      if (isVisible) {
+        overlays[layerName].addTo(map);
+      } else {
+        map.removeLayer(overlays[layerName]);
+      }
+    }
+  }
+
+  // ===== Layer Styling Functions =====
   function pointToLayerHydrant(feature, latlng) {
     return L.circleMarker(latlng, {
       radius: 4,
       weight: 1,
       opacity: 1,
       fillOpacity: 0.8,
-      color: 'red',
-      fillColor: 'red'
+      color: '#dc2626',
+      fillColor: '#dc2626'
     });
   }
 
@@ -73,18 +802,17 @@
     const provider = p.provider ? `<div><b>Proveedor:</b> ${p.provider}</div>` : "";
     const status = p.status ? `<div><b>Estado:</b> ${p.status}</div>` : "";
     const tags = p.tags ? `<div><b>Etiquetas:</b> ${JSON.stringify(p.tags)}</div>` : "";
-    layer.bindPopup(`<b>Hidrante</b>${extId}${provider}${status}${tags}`);
+    layer.bindPopup(`<b>🚒 Hidrante</b>${extId}${provider}${status}${tags}`);
   }
 
-  // ===== Traffic Calming layer =====
   function pointToLayerCalming(feature, latlng) {
     return L.circleMarker(latlng, {
       radius: 3,
       weight: 1,
       opacity: 1,
       fillOpacity: 0.7,
-      color: 'purple',
-      fillColor: 'purple'
+      color: '#7c3aed',
+      fillColor: '#7c3aed'
     });
   }
 
@@ -92,8 +820,9 @@
     const p = feature.properties || {};
     const subtype = p.subtype ? `<div><b>Tipo:</b> ${p.subtype}</div>` : "";
     const severity = p.severity != null ? `<div><b>Severidad:</b> ${p.severity}</div>` : "";
-    layer.bindPopup(`<b>Amenaza Calming</b>${subtype}${severity}`);
+    layer.bindPopup(`<b>🚧 Amenaza Calming</b>${subtype}${severity}`);
   }
+
   const wazeStylePoint = (f) => ({
     radius: f.properties.subtype === "CLOSURE" ? 6 : 5,
     weight: 1,
@@ -102,7 +831,7 @@
   });
 
   function pointToLayerWaze(feature, latlng) {
-    const color = feature.properties.subtype === "CLOSURE" ? "#d73027" : "#fc8d59";
+    const color = feature.properties.subtype === "CLOSURE" ? "#dc2626" : "#d97706";
     return L.circleMarker(latlng, Object.assign(wazeStylePoint(feature), { color, fillColor: color }));
   }
 
@@ -110,21 +839,20 @@
     return {
       weight: 4,
       opacity: 0.8,
-      color: "#fee090" // jam
+      color: "#d97706"
     };
   }
 
   function popupWaze(feature, layer) {
     const p = feature.properties || {};
-    const title = p.subtype === "TRAFFIC_JAM" ? "Tráfico (Waze)" :
-                  (p.subtype === "CLOSURE" ? "Cierre (Waze)" : "Incidente (Waze)");
+    const title = p.subtype === "TRAFFIC_JAM" ? "🚗 Tráfico (Waze)" :
+                  (p.subtype === "CLOSURE" ? "🚫 Cierre (Waze)" : "⚠️ Incidente (Waze)");
     const desc = p.description ? `<div>${p.description}</div>` : "";
     const street = p.street ? `<div><b>Calle:</b> ${p.street}</div>` : "";
     const sev = p.severity != null ? `<div><b>Severidad:</b> ${p.severity}</div>` : "";
     layer.bindPopup(`<b>${title}</b>${desc}${street}${sev}`);
   }
 
-  // ===== Road Metadata layer =====
   function popupRoad(feature, layer) {
     const p = feature.properties || {};
     const highway = p.highway ? `<div><b>Tipo:</b> ${p.highway}</div>` : "";
@@ -133,50 +861,14 @@
     const maxwidth = p.maxwidth_m ? `<div><b>Ancho máx:</b> ${p.maxwidth_m}m</div>` : "";
     const oneway = p.oneway !== undefined ? `<div><b>Sentido único:</b> ${p.oneway ? 'Sí' : 'No'}</div>` : "";
     const osmId = p.osm_id ? `<div><b>OSM ID:</b> ${p.osm_id}</div>` : "";
-    layer.bindPopup(`<b>Carretera</b>${highway}${lanes}${width}${maxwidth}${oneway}${osmId}`);
+    layer.bindPopup(`<b>🛣️ Carretera</b>${highway}${lanes}${width}${maxwidth}${oneway}${osmId}`);
   }
 
-  const wazePromise = fetch('/data/waze_threats.geojson')
-    .then(r => r.json())
-    .then(gj => {
-      const wazeLayer = L.geoJSON(gj, {
-        pointToLayer: pointToLayerWaze,
-        style: styleLineWaze,
-        onEachFeature: popupWaze
-      });
-      overlays["Waze — Incidentes/Cierres"] = wazeLayer;
-      if (document.getElementById('showWaze').checked) {
-        wazeLayer.addTo(map);
-      }
-      try { map.fitBounds(wazeLayer.getBounds(), { maxZoom: 14 }); } catch(e) {}
-    })
-    .catch(() => {
-      console.warn("No se pudo cargar data/waze_threats.geojson");
-    });
-
-  const hydrantsPromise = fetch('/api/hydrants')
-    .then(r => r.json())
-    .then(gj => {
-      const hydrantsLayer = L.geoJSON(gj, {
-        pointToLayer: pointToLayerHydrant,
-        onEachFeature: popupHydrant
-      });
-      overlays["Hidrantes"] = hydrantsLayer;
-      if (document.getElementById('showHydrants').checked) {
-        hydrantsLayer.addTo(map);
-      }
-    })
-    .catch(() => {
-      console.warn("No se pudo cargar /api/hydrants");
-    });
-
-  // ===== Weather Threats layer =====
+  // ===== Weather Threats Functions =====
   function getWeatherStyle(feature) {
     const props = feature.properties?.props || {};
     const subtype = props.subtype || 'UNKNOWN';
     const severity = props.severity || 0;
-
-    // Base opacity based on severity (0-1)
     const baseOpacity = Math.min(0.3 + (severity * 0.1), 0.8);
 
     switch (subtype) {
@@ -223,10 +915,10 @@
         };
       default:
         return {
-          color: 'orange',
+          color: '#d97706',
           weight: 2,
           opacity: 0.6,
-          fillColor: 'orange',
+          fillColor: '#d97706',
           fillOpacity: baseOpacity
         };
     }
@@ -280,6 +972,41 @@
     `);
   }
 
+  // ===== Load Data Layers =====
+  const wazePromise = fetch('/data/waze_threats.geojson')
+    .then(r => r.json())
+    .then(gj => {
+      const wazeLayer = L.geoJSON(gj, {
+        pointToLayer: pointToLayerWaze,
+        style: styleLineWaze,
+        onEachFeature: popupWaze
+      });
+      overlays["Waze — Incidentes/Cierres"] = wazeLayer;
+      if (document.getElementById('showWaze').checked) {
+        wazeLayer.addTo(map);
+      }
+      try { map.fitBounds(wazeLayer.getBounds(), { maxZoom: 14 }); } catch(e) {}
+    })
+    .catch(() => {
+      console.warn("No se pudo cargar data/waze_threats.geojson");
+    });
+
+  const hydrantsPromise = fetch('/api/hydrants')
+    .then(r => r.json())
+    .then(gj => {
+      const hydrantsLayer = L.geoJSON(gj, {
+        pointToLayer: pointToLayerHydrant,
+        onEachFeature: popupHydrant
+      });
+      overlays["Hidrantes"] = hydrantsLayer;
+      if (document.getElementById('showHydrants').checked) {
+        hydrantsLayer.addTo(map);
+      }
+    })
+    .catch(() => {
+      console.warn("No se pudo cargar /api/hydrants");
+    });
+
   const weatherPromise = fetch('/data/weather_threats.geojson')
     .then(r => r.json())
     .then(gj => {
@@ -312,103 +1039,65 @@
       console.warn("No se pudo cargar /data/calming_threats.geojson");
     });
 
-  // ===== Road Metadata layers =====
-  const roadWidthPromise = fetch('/metadata/road_widths.geojson')
-    .then(r => r.json())
-    .then(gj => {
-      const roadWidthLayer = L.geoJSON(gj, {
-        style: { color: 'blue', weight: 3, opacity: 0.3 },
-        onEachFeature: popupRoad
-      });
-      overlays["Metadata — Ancho de Carreteras"] = roadWidthLayer;
-      // Don't add to map by default as it might be too cluttered
-    })
-    .catch(() => {
-      console.warn("No se pudo cargar metadata/road_widths.geojson");
-    });
-
-  const roadOnewayPromise = fetch('/metadata/road_oneway.geojson')
-    .then(r => r.json())
-    .then(gj => {
-      const roadOnewayLayer = L.geoJSON(gj, {
-        style: { color: 'green', weight: 3, opacity: 0.3 },
-        onEachFeature: popupRoad
-      });
-      overlays["Metadata — Sentido Único"] = roadOnewayLayer;
-      // Don't add to map by default as it might be too cluttered
-    })
-    .catch(() => {
-      console.warn("No se pudo cargar metadata/road_oneway.geojson");
-    });
-
-  Promise.allSettled([wazePromise, hydrantsPromise, weatherPromise, calmingPromise, roadWidthPromise, roadOnewayPromise]).then(() => {
-    L.control.layers(null, overlays, { collapsed: false }).addTo(map);
-  });
-
-  // ===== Routing functionality =====
-  let startMarker = null;
-  let endMarker = null;
-  let routeLayers = {};
-  let settingStart = false;
-  let settingEnd = false;
-
-  // Layer management
-  const layerCheckboxes = {
-    showWaze: 'Waze — Incidentes/Cierres',
-    showWeather: 'Amenazas Clima',
-    showCalming: 'Amenazas Calming',
-    showHydrants: 'Hidrantes'
-  };
-
-  Object.keys(layerCheckboxes).forEach(id => {
-    document.getElementById(id).addEventListener('change', (e) => {
-      const layerName = layerCheckboxes[id];
-      if (e.target.checked) {
-        if (overlays[layerName]) overlays[layerName].addTo(map);
-      } else {
-        if (overlays[layerName]) map.removeLayer(overlays[layerName]);
-      }
-    });
-  });
-
+  // ===== Location and Route Functions =====
   document.getElementById('useLocation').addEventListener('change', () => {
     if (navigator.geolocation) {
+      updateStatus('Obteniendo ubicación...', 'loading');
       navigator.geolocation.getCurrentPosition((position) => {
         const lat = position.coords.latitude;
         const lng = position.coords.longitude;
         if (startMarker) map.removeLayer(startMarker);
-        startMarker = L.marker([lat, lng], { color: 'green' }).addTo(map);
-        document.getElementById('status').textContent = 'Ubicación actual establecida como inicio.';
+        startMarker = L.marker([lat, lng], {
+          icon: L.divIcon({
+            html: '<div style="background: #059669; border: 2px solid white; border-radius: 50%; width: 20px; height: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);"></div>',
+            className: 'custom-marker',
+            iconSize: [20, 20]
+          })
+        }).addTo(map);
+        updateStatus('✅ Ubicación actual establecida como inicio', 'success');
       }, () => {
-        document.getElementById('status').textContent = 'No se pudo obtener la ubicación.';
+        updateStatus('❌ No se pudo obtener la ubicación', 'error');
       });
     } else {
-      document.getElementById('status').textContent = 'Geolocalización no soportada.';
+      updateStatus('❌ Geolocalización no soportada', 'error');
     }
   });
 
   document.getElementById('setStart').addEventListener('click', () => {
     settingStart = true;
     settingEnd = false;
-    document.getElementById('status').textContent = 'Haz clic en el mapa para establecer el punto de inicio.';
+    updateStatus('📍 Haz clic en el mapa para establecer el punto de inicio', 'info');
+    map.getContainer().style.cursor = 'crosshair';
   });
 
   document.getElementById('setEnd').addEventListener('click', () => {
     settingEnd = true;
     settingStart = false;
-    document.getElementById('status').textContent = 'Haz clic en el mapa para establecer el punto de fin.';
+    updateStatus('🎯 Haz clic en el mapa para establecer el punto de fin', 'info');
+    map.getContainer().style.cursor = 'crosshair';
   });
 
   document.getElementById('calculate').addEventListener('click', async () => {
     if (!startMarker || !endMarker) {
-      document.getElementById('status').textContent = 'Establece puntos de inicio y fin primero.';
+      updateStatus('❌ Establece puntos de inicio y fin primero', 'error');
       return;
     }
+
     const start = startMarker.getLatLng();
     const end = endMarker.getLatLng();
     const algorithms = ['dijkstra_dist', 'dijkstra_prob', 'astar_prob', 'cplex'].filter(id => document.getElementById(id).checked);
+
+    if (algorithms.length === 0) {
+      updateStatus('❌ Selecciona al menos un algoritmo', 'error');
+      return;
+    }
+
     const simulate_failures = document.getElementById('simulate_failures').checked;
-    
+
+    // Show loading overlay
+    document.getElementById('loadingOverlay').style.display = 'flex';
+    updateStatus('🔄 Calculando rutas...', 'loading');
+
     try {
       const response = await fetch('/api/calculate_route', {
         method: 'POST',
@@ -420,77 +1109,135 @@
           simulate_failures: simulate_failures
         })
       });
-      
-      console.log(`Calculating route from (${start.lat}, ${start.lng}) to (${end.lat}, ${end.lng})`);
+
       const data = await response.json();
 
       if (data.error) {
-        document.getElementById('status').textContent = 'Error: ' + data.error;
+        updateStatus('❌ Error: ' + data.error, 'error');
         return;
       }
 
-      // Add routes for each algorithm that was requested
+      // Clear previous routes
+      Object.values(routeLayers).forEach(layer => {
+        if (layer) map.removeLayer(layer);
+      });
+      routeLayers = {};
+
+      // Add routes for each algorithm
       let statusMessages = [];
-      
+      const colors = {
+        'dijkstra_dist': '#2563eb',
+        'dijkstra_prob': '#dc2626',
+        'astar_prob': '#059669',
+        'cplex': '#7c3aed'
+      };
+
       for (const algorithm of algorithms) {
         if (data[algorithm]) {
           const routeGeojson = data[algorithm].route_geojson;
-          const color = algorithm === 'dijkstra_dist' ? 'blue' : 
-                       algorithm === 'dijkstra_prob' ? 'red' : 
-                       algorithm === 'astar_prob' ? 'green' : 'purple';
-          
-          console.log(`Processing route for ${algorithm}`);
-          console.log('Route GeoJSON:', routeGeojson);
-          
+          const color = colors[algorithm];
+
           if (routeGeojson && routeGeojson.geometry && routeGeojson.geometry.coordinates && Array.isArray(routeGeojson.geometry.coordinates) && routeGeojson.geometry.coordinates.length > 0) {
-            console.log(`Using real route geometry for ${algorithm} - ${routeGeojson.geometry.coordinates.length} points`);
             routeLayers[algorithm] = L.geoJSON(routeGeojson, {
-              style: { color: color, weight: 6, opacity: 0.9 }
+              style: {
+                color: color,
+                weight: 6,
+                opacity: 0.9,
+                shadow: '0 0 10px rgba(0,0,0,0.3)'
+              }
             }).addTo(map);
-          } else {
-            console.log(`No route could be calculated for ${algorithm} - showing error popup`);
-            // Show error popup when no route can be calculated
-            const start = startMarker.getLatLng();
-            const end = endMarker.getLatLng();
-            const centerLat = (start.lat + end.lat) / 2;
-            const centerLng = (start.lng + end.lng) / 2;
-            
-            L.popup()
-              .setLatLng([centerLat, centerLng])
-              .setContent(`<div style="text-align: center; color: red; font-weight: bold;">
-                ❌ No se pudo calcular la ruta ${algorithm.replace('_', ' ').toUpperCase()}<br>
-                <small>Verifique coordenadas</small>
-              </div>`)
-              .openOn(map);
-            
-            // Still add an empty layer to maintain the structure
-            routeLayers[algorithm] = L.layerGroup().addTo(map);
+
+            // Add route info popup
+            const routeInfo = routeGeojson.properties || {};
+            const length = routeInfo.total_length_m ? `${(routeInfo.total_length_m / 1000).toFixed(1)} km` : 'N/A';
+            const cost = routeInfo.total_cost ? routeInfo.total_cost.toFixed(1) : 'N/A';
+
+            routeLayers[algorithm].bindPopup(`
+              <div style="text-align: center;">
+                <b>${getAlgorithmName(algorithm)}</b><br>
+                <div style="margin: 8px 0;">
+                  <span style="color: ${color}; font-size: 18px;">📏</span> ${length}<br>
+                  <span style="color: ${color}; font-size: 18px;">⚡</span> Costo: ${cost}
+                </div>
+              </div>
+            `);
           }
-          
-          statusMessages.push(`${algorithm}: ${data[algorithm].compute_time_ms}ms`);
+
+          statusMessages.push(`${getAlgorithmName(algorithm)}: ${data[algorithm].compute_time_ms}ms`);
         }
       }
-      
-      document.getElementById('status').textContent = `Rutas calculadas: ${statusMessages.join(', ')}`;
+
+      updateStatus(`✅ Rutas calculadas: ${statusMessages.join(', ')}`, 'success');
     } catch (error) {
-      document.getElementById('status').textContent = 'Error al calcular las rutas.';
+      updateStatus('❌ Error al calcular las rutas', 'error');
       console.error(error);
+    } finally {
+      document.getElementById('loadingOverlay').style.display = 'none';
     }
   });
 
+  function getAlgorithmName(algorithm) {
+    const names = {
+      'dijkstra_dist': 'Dijkstra (Distancia)',
+      'dijkstra_prob': 'Dijkstra (Ponderado)',
+      'astar_prob': 'A* (Ponderado)',
+      'cplex': 'CPLEX (Optimización)'
+    };
+    return names[algorithm] || algorithm;
+  }
+
+  function updateStatus(message, type = 'info') {
+    const statusElement = document.getElementById('status');
+    statusElement.textContent = message;
+    statusElement.className = 'status-message';
+
+    if (type === 'loading') {
+      statusElement.classList.add('status-loading');
+    } else if (type === 'success') {
+      statusElement.classList.add('status-success');
+    } else if (type === 'error') {
+      statusElement.classList.add('status-error');
+    }
+  }
+
+  // ===== Map Click Handler =====
   map.on('click', (e) => {
     if (settingStart) {
       if (startMarker) map.removeLayer(startMarker);
-      startMarker = L.marker(e.latlng, { color: 'green' }).addTo(map);
+      startMarker = L.marker(e.latlng, {
+        icon: L.divIcon({
+          html: '<div style="background: #059669; border: 2px solid white; border-radius: 50%; width: 20px; height: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);"></div>',
+          className: 'custom-marker',
+          iconSize: [20, 20]
+        })
+      }).addTo(map);
       settingStart = false;
-      document.getElementById('status').textContent = 'Punto de inicio establecido.';
+      map.getContainer().style.cursor = '';
+      updateStatus('✅ Punto de inicio establecido', 'success');
     } else if (settingEnd) {
       if (endMarker) map.removeLayer(endMarker);
-      endMarker = L.marker(e.latlng, { color: 'red' }).addTo(map);
+      endMarker = L.marker(e.latlng, {
+        icon: L.divIcon({
+          html: '<div style="background: #dc2626; border: 2px solid white; border-radius: 50%; width: 20px; height: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);"></div>',
+          className: 'custom-marker',
+          iconSize: [20, 20]
+        })
+      }).addTo(map);
       settingEnd = false;
-      document.getElementById('status').textContent = 'Punto de fin establecido.';
+      map.getContainer().style.cursor = '';
+      updateStatus('✅ Punto de fin establecido', 'success');
     }
   });
+
+  // ===== Initialize UI =====
+  updateAlgorithmSelection();
+  updateLayerSelection();
+  updateStatus('🚀 Sistema listo para calcular rutas', 'success');
+
+  // Add fade-in animation to panel
+  setTimeout(() => {
+    controlPanel.classList.add('fade-in');
+  }, 100);
 </script>
 </body>
 </html>
