@@ -170,11 +170,122 @@
       console.warn("No se pudo cargar /api/hydrants");
     });
 
+  // ===== Weather Threats layer =====
+  function getWeatherStyle(feature) {
+    const props = feature.properties?.props || {};
+    const subtype = props.subtype || 'UNKNOWN';
+    const severity = props.severity || 0;
+
+    // Base opacity based on severity (0-1)
+    const baseOpacity = Math.min(0.3 + (severity * 0.1), 0.8);
+
+    switch (subtype) {
+      case 'HEAVY_RAIN':
+        return {
+          color: '#0066cc',
+          weight: 1,
+          opacity: 0.8,
+          fillColor: '#0066cc',
+          fillOpacity: baseOpacity
+        };
+      case 'STRONG_WIND':
+        return {
+          color: '#666666',
+          weight: 2,
+          opacity: 0.7,
+          fillColor: '#cccccc',
+          fillOpacity: baseOpacity * 0.5,
+          dashArray: '5, 5'
+        };
+      case 'LOW_VISIBILITY':
+        return {
+          color: '#999999',
+          weight: 1,
+          opacity: 0.6,
+          fillColor: '#dddddd',
+          fillOpacity: baseOpacity
+        };
+      case 'SNOW':
+        return {
+          color: '#ffffff',
+          weight: 1,
+          opacity: 0.9,
+          fillColor: '#ffffff',
+          fillOpacity: baseOpacity
+        };
+      case 'RAIN_WIND':
+        return {
+          color: '#3399ff',
+          weight: 1,
+          opacity: 0.7,
+          fillColor: '#3399ff',
+          fillOpacity: baseOpacity
+        };
+      default:
+        return {
+          color: 'orange',
+          weight: 2,
+          opacity: 0.6,
+          fillColor: 'orange',
+          fillOpacity: baseOpacity
+        };
+    }
+  }
+
+  function popupWeather(feature, layer) {
+    const props = feature.properties?.props || {};
+    const subtype = props.subtype || 'Desconocido';
+    const severity = props.severity || 0;
+    const metrics = props.metrics || {};
+
+    let weatherIcon = '';
+    let description = '';
+
+    switch (subtype) {
+      case 'HEAVY_RAIN':
+        weatherIcon = '🌧️';
+        description = 'Lluvia intensa';
+        break;
+      case 'STRONG_WIND':
+        weatherIcon = '💨';
+        description = 'Viento fuerte';
+        break;
+      case 'LOW_VISIBILITY':
+        weatherIcon = '🌫️';
+        description = 'Visibilidad reducida';
+        break;
+      case 'SNOW':
+        weatherIcon = '❄️';
+        description = 'Nieve';
+        break;
+      case 'RAIN_WIND':
+        weatherIcon = '🌦️';
+        description = 'Lluvia y viento';
+        break;
+      default:
+        weatherIcon = '🌤️';
+        description = 'Condición climática';
+    }
+
+    const windInfo = metrics.wind_ms ? `<div><b>Viento:</b> ${metrics.wind_ms} m/s</div>` : '';
+    const rainInfo = metrics.rain_mm_h ? `<div><b>Lluvia:</b> ${metrics.rain_mm_h} mm/h</div>` : '';
+
+    layer.bindPopup(`
+      <div style="text-align: center; font-size: 24px; margin-bottom: 8px;">${weatherIcon}</div>
+      <b>${description}</b><br>
+      <div><b>Severidad:</b> ${severity}/10</div>
+      ${windInfo}
+      ${rainInfo}
+      <div><b>Proveedor:</b> ${props.provider || 'N/A'}</div>
+    `);
+  }
+
   const weatherPromise = fetch('/data/weather_threats.geojson')
     .then(r => r.json())
     .then(gj => {
       const weatherLayer = L.geoJSON(gj, {
-        style: { color: 'orange', weight: 2 }
+        style: getWeatherStyle,
+        onEachFeature: popupWeather
       });
       overlays["Amenazas Clima"] = weatherLayer;
       if (document.getElementById('showWeather').checked) {
